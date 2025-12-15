@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 
-from . import models
+try:  # allow use both as package import and standalone module
+    from . import models  # type: ignore
+except ImportError:  # pragma: no cover
+    import models  # type: ignore
 
 
 def attach_flutningsmenn(doc):
@@ -87,4 +90,50 @@ class NefndMember(models.Base):
 
     __table_args__ = (
         models.UniqueConstraint("lthing", "nefnd_id", "member_id", "name", "inn", name="uq_nefnd_member"),
+    )
+
+
+class CommitteeMeeting(models.Base):
+    __tablename__ = "committee_meeting"
+
+    id = models.Column(models.Integer, primary_key=True, autoincrement=True)
+    meeting_num = models.Column(models.Integer, index=True)
+    lthing = models.Column(models.Integer, index=True)
+    nefnd_id = models.Column(models.Integer, index=True, nullable=True)
+    start_time = models.Column(models.Text, nullable=True)
+    end_time = models.Column(models.Text, nullable=True)
+    raw_xml = models.Column(models.Text)
+
+    __table_args__ = (
+        models.UniqueConstraint("meeting_num", "lthing", name="uq_committee_meeting_num"),
+    )
+
+
+class CommitteeAttendance(models.Base):
+    __tablename__ = "committee_attendance"
+
+    id = models.Column(models.Integer, primary_key=True, autoincrement=True)
+    meeting_id = models.Column(models.Integer, index=True)
+    meeting_num = models.Column(models.Integer, index=True)
+    lthing = models.Column(models.Integer, index=True)
+    member_id = models.Column(models.Integer, index=True)
+    status = models.Column(models.Text)  # present, proxy_present, notified_absent, absent
+    role = models.Column(models.Text, nullable=True)
+    substitute_for_member_id = models.Column(models.Integer, nullable=True)
+
+    __table_args__ = (
+        models.UniqueConstraint("meeting_id", "member_id", name="uq_committee_attendance"),
+    )
+
+
+class VoteSession(models.Base):
+    __tablename__ = "vote_session"
+
+    id = models.Column(models.Integer, primary_key=True, autoincrement=True)
+    lthing = models.Column(models.Integer, index=True)
+    vote_num = models.Column(models.Integer, index=True)
+    time = models.Column(models.Text, nullable=True)
+
+    __table_args__ = (
+        models.UniqueConstraint("lthing", "vote_num", name="uq_vote_session_vote_num"),
     )

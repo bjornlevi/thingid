@@ -32,6 +32,12 @@
                                 {% elif m.leaf_faedingardagur %}
                                     <span class="muted">Fædd/ur {{ m.leaf_faedingardagur }}</span>
                                 {% endif %}
+                                {% if m.vote_att_pct is not none %}
+                                    <span class="pill neutral">Mæting í atkvæðagreiðslur: {{ "%.1f"|format(m.vote_att_pct) }}%</span>
+                                {% endif %}
+                                {% if m.committee_att_pct is not none %}
+                                    <span class="pill neutral">Mæting á nefndarfundi: {{ "%.1f"|format(m.committee_att_pct) }}%</span>
+                                {% endif %}
                             </div>
                             <div class="links">
                                 {% if m.attr_id %}

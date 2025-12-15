@@ -24,14 +24,20 @@ import os
 import sys
 import time
 import re
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
+from pathlib import Path
 
 import requests
 import xml.etree.ElementTree as ET
-from sqlalchemy import UniqueConstraint, create_engine, text
+from sqlalchemy import UniqueConstraint, create_engine, text, select
 from sqlalchemy.orm import Session
+
+def _norm_tag(tag: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "", tag or "")
+    return cleaned.lower()
 
 BASE_CURRENT = "https://www.althingi.is/altext/xml/loggjafarthing/yfirstandandi/"
 
@@ -234,6 +240,220 @@ def unique_constraint_columns(model: Any) -> List[List[str]]:
         if isinstance(c, UniqueConstraint):
             cols.append([col.name for col in c.columns])
     return cols
+
+
+def cache_nefndarfundir(fetcher: Fetcher, lthing: int) -> None:
+    """
+    Fetch nefndarfundir list and cache each fundargerð XML/HTML using the existing fetcher cache.
+    """
+    base_url = f"https://www.althingi.is//altext/xml/nefndarfundir/?lthing={lthing}"
+    try:
+        root = parse_xml(fetcher.get(base_url), base_url)
+    except Exception as e:
+        print(f"[warn] failed to fetch nefndarfundir for lthing {lthing}: {e}")
+        return
+
+    seen = set()
+    fetched = 0
+    for nf in root.iter():
+        if strip_ns(nf.tag) != "nefndarfundur":
+            continue
+        for fg in nf.iter():
+            if strip_ns(fg.tag) == "xml":
+                u = (fg.text or "").strip()
+                if not u:
+                    continue
+                full = norm_url(base_url, u)
+                if full in seen:
+                    continue
+                seen.add(full)
+                try:
+                    fetcher.get(full)
+                    fetched += 1
+                except Exception as e:
+                    print(f"[warn] failed to fetch fundargerð {full}: {e}")
+    print(f"[ok] nefndarfundir: cached {fetched} fundargerðir for lthing {lthing}")
+
+
+def parse_attendance_text(text: str, abbr_to_id: Dict[str, int]) -> Tuple[List[Dict[str, Any]], set]:
+    """
+    Parse attendance from fundargerð HTML-ish text.
+    Returns (attendance_records, meeting_member_ids_seen)
+    attendance_records: dicts with member_id, status, substitute_for_member_id (optional)
+    """
+    attendance: List[Dict[str, Any]] = []
+    seen_members: set = set()
+    if not text:
+        return attendance, seen_members
+    lower = text.lower()
+    start = lower.find("mætt:")
+    if start == -1:
+        return attendance, seen_members
+    section = text[start:]
+    stop_markers = ["<h2", "bókað:", "b\u00f3ka\u00f0:"]
+    stop = len(section)
+    for m in stop_markers:
+        idx = section.lower().find(m)
+        if idx != -1:
+            stop = min(stop, idx)
+    section = section[:stop]
+    parts = re.split(r"<br\\s*/?>", section, flags=re.IGNORECASE)
+    for raw in parts:
+        line = raw.strip()
+        if not line:
+            continue
+        lower_line = line.lower()
+        # notified absence?
+        if "boðaði forföll" in lower_line or "bo\u00f0a\u00f0i forf\u00f6ll" in lower_line or "fjarverandi" in lower_line:
+            m = re.search(r"\(([^\)]+)\)", line)
+            if m:
+                abbr = _norm_tag(m.group(1))
+                mid = abbr_to_id.get(abbr)
+                if mid:
+                    seen_members.add(mid)
+                    attendance.append({"member_id": mid, "status": "absent_notified"})
+            continue
+        # proxy: ... fyrir Y (ABBR)
+        if "fyrir" in lower_line:
+            m = re.findall(r"\(([^\)]+)\)", line)
+            if len(m) >= 2:
+                target_abbr = _norm_tag(m[-1])
+                target_mid = abbr_to_id.get(target_abbr)
+                if target_mid:
+                    seen_members.add(target_mid)
+                    attendance.append({"member_id": target_mid, "status": "proxy_present"})
+            continue
+        # normal attendance
+        m = re.search(r"\(([^\)]+)\)", line)
+        if m:
+            abbr = _norm_tag(m.group(1))
+            mid = abbr_to_id.get(abbr)
+            if mid:
+                seen_members.add(mid)
+            attendance.append({"member_id": mid, "status": "present"})
+    return attendance, seen_members
+
+
+def populate_vote_sessions_and_attendance(session: Session, all_votes: List[Any], lthing: int, manual_models: Any) -> Dict[int, Dict[str, int]]:
+    """
+    Store vote sessions (vote_num, time) and return per-member vote counts excluding notified absences.
+    all_votes: list of Atkvaedagreidslur rows with attr_atkvaedagreidslunumer and leaf_timi
+    """
+    counts: Dict[int, Dict[str, int]] = defaultdict(lambda: {"attended": 0, "total": 0})
+    if not manual_models or not hasattr(manual_models, "VoteSession"):
+        return counts
+    VoteSession = manual_models.VoteSession
+    session.execute(text('DELETE FROM vote_session WHERE lthing=:lt'), {"lt": lthing})
+    session.flush()
+    seen_vote_nums = set()
+    for v in all_votes:
+        vote_num = getattr(v, "attr_atkvaedagreidslunumer", None)
+        if vote_num is None:
+            continue
+        if vote_num in seen_vote_nums:
+            continue
+        seen_vote_nums.add(vote_num)
+        session.add(VoteSession(lthing=lthing, vote_num=vote_num, time=getattr(v, "leaf_timi", None)))
+    session.commit()
+
+    # Build voter attendance counts from vote_details already stored
+    rows = session.execute(
+        text("SELECT voter_id, vote FROM vote_details WHERE vote IN ('já','nei','greiðir ekki atkvæði','boðaði fjarvist')")
+    ).fetchall()
+    for voter_id, vote in rows:
+        if voter_id is None:
+            continue
+        if vote == "boðaði fjarvist":
+            # counts as an opportunity but not attended
+            counts[int(voter_id)]["total"] += 1
+            continue
+        counts[int(voter_id)]["attended"] += 1
+        counts[int(voter_id)]["total"] += 1
+    return counts
+
+
+def populate_committee_attendance(session: Session, cache_dir: Path, lthing: int, abbr_to_id: Dict[str, int], manual_models: Any) -> Dict[int, Dict[str, int]]:
+    """
+    Parse cached fundargerðir and store committee_meeting + committee_attendance.
+    Returns per-member counts {member_id: {"attended": x, "total": y}}
+    """
+    counts: Dict[int, Dict[str, int]] = defaultdict(lambda: {"attended": 0, "total": 0})
+    if not manual_models or not hasattr(manual_models, "CommitteeMeeting") or not hasattr(manual_models, "CommitteeAttendance"):
+        return counts
+    CommitteeMeeting = manual_models.CommitteeMeeting
+    CommitteeAttendance = manual_models.CommitteeAttendance
+    session.execute(text('DELETE FROM committee_attendance WHERE lthing=:lt'), {"lt": lthing})
+    session.execute(text('DELETE FROM committee_meeting WHERE lthing=:lt'), {"lt": lthing})
+    session.flush()
+
+    for fp in cache_dir.glob("*nefndarfundur*"):
+        try:
+            root = ET.parse(fp).getroot()
+            attrs = root.attrib
+            meeting_num = None
+            try:
+                meeting_num = int(attrs.get("númer") or attrs.get("numer") or attrs.get("nummer") or attrs.get("númer") or attrs.get("númer"))
+            except Exception:
+                pass
+            nefnd_id = None
+            for c in root:
+                if strip_ns(c.tag) == "nefnd":
+                    try:
+                        nefnd_id = int(c.attrib.get("id"))
+                    except Exception:
+                        nefnd_id = None
+                    break
+            meeting_dt = None
+            meeting_end = None
+            for t in root.iter():
+                tag = strip_ns(t.tag)
+                if tag == "dagurtími" or tag == "dagurtimi":
+                    meeting_dt = parse_date(t.text) or _parse_iso(t.text)
+                elif tag == "fundursettur":
+                    meeting_dt = meeting_dt or _parse_iso(t.text)
+                elif tag == "fuslit":
+                    meeting_end = _parse_iso(t.text)
+            texti = None
+            for t in root.iter():
+                if strip_ns(t.tag) == "texti":
+                    texti = t.text or ""
+                    break
+            # store meeting
+            mt = CommitteeMeeting(
+                meeting_num=meeting_num,
+                lthing=lthing,
+                nefnd_id=nefnd_id,
+                start_time=meeting_dt.isoformat() if meeting_dt else None,
+                end_time=meeting_end.isoformat() if meeting_end else None,
+                raw_xml=ET.tostring(root, encoding="unicode"),
+            )
+            session.add(mt)
+            session.flush()
+            meeting_id = mt.id
+            if texti:
+                attendance, seen_ids = parse_attendance_from_html(texti, abbr_to_id)
+                for rec in attendance:
+                    mid = rec.get("member_id")
+                    if not mid:
+                        continue
+                    status = rec.get("status") or "present"
+                    session.add(CommitteeAttendance(
+                        meeting_id=meeting_id,
+                        meeting_num=meeting_num,
+                        lthing=lthing,
+                        member_id=mid,
+                        status=status,
+                        substitute_for_member_id=None,
+                    ))
+                    if status == "present" or status == "proxy_present":
+                        counts[mid]["attended"] += 1
+                        counts[mid]["total"] += 1
+                    elif status == "absent_notified":
+                        counts[mid]["total"] += 1
+            session.commit()
+        except Exception:
+            continue
+    return counts
 
 
 def parse_issue_documents(detail_xml: ET.Element, malflokkur: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -487,6 +707,7 @@ def main() -> int:
         issue_documents: List[Any] = []
         vote_details_to_add: List[Any] = []
         seats_to_add: List[Any] = []
+        all_votes_records: List[Any] = []
         for r in schema_map["resources"]:
             if "error" in r:
                 continue
@@ -755,10 +976,34 @@ def main() -> int:
                 session.add_all(vote_details_to_add)
                 session.commit()
                 print(f"[ok] atkvæðagreiðslur: stored {len(vote_details_to_add)} vote_details")
+            if name == "atkvæðagreiðslur":
+                all_votes_records.extend(records)
             if name == "þingmannalisti" and seats_to_add:
                 session.add_all(seats_to_add)
                 session.commit()
                 print(f"[ok] þingmannalisti: stored {len(seats_to_add)} member seats")
+
+    # Extra: cache nefndarfundir + fundargerðir for this þing to support attendance parsing
+    if args.cache_dir:
+        try:
+            cache_nefndarfundir(fetcher, lthing)
+        except Exception as e:
+            print(f"[warn] failed to cache nefndarfundir: {e}")
+
+    # Aggregate vote sessions and committee attendance into manual tables
+    if manual_models:
+        with Session(engine) as session:
+            # map abbrev -> member_id
+            abbr_map = {}
+            people = session.execute(select(models.ThingmannalistiThingmadur)).scalars().all()
+            for p in people:
+                if p.attr_id is not None and p.leaf_skammstofun:
+                    abbr_map[_norm_tag(p.leaf_skammstofun)] = int(p.attr_id)
+            # vote sessions
+            populate_vote_sessions_and_attendance(session, all_votes_records, lthing, manual_models)
+            # committee attendance
+            cache_dir = Path(args.cache_dir)
+            populate_committee_attendance(session, cache_dir, lthing, abbr_map, manual_models)
 
     print(f"Done. DB: {args.db}")
     return 0

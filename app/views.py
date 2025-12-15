@@ -8,12 +8,17 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import requests
 from flask import Blueprint, current_app, render_template
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from urllib.parse import quote
 
 from . import models
+try:
+    import app.manual_models as manual_models  # type: ignore
+except Exception:
+    manual_models = None
 from .views_helper import (
     current_lthing,
     parse_date,
@@ -133,6 +138,19 @@ def _parse_iso(ts: Optional[str]) -> Optional[dt.datetime]:
         return dt.datetime.fromisoformat(ts)
     except Exception:
         return None
+    return None
+
+
+def _in_intervals(ts: Optional[dt.datetime], intervals: List[Tuple[Optional[dt.datetime], Optional[dt.datetime]]]) -> bool:
+    if ts is None:
+        return False
+    for inn, ut in intervals:
+        if inn and ts < inn:
+            continue
+        if ut and ts > ut:
+            continue
+        return True
+    return False
 
 
 def _fmt_duration(start: Optional[dt.datetime], end: Optional[dt.datetime]) -> Optional[str]:
@@ -255,6 +273,74 @@ def _cached_speeches(
         speeches = []
     cache[url] = speeches
     return speeches
+
+
+def _norm_abbr(s: str) -> str:
+    s = s or ""
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if ch.isalnum())
+    return s.lower()
+
+
+def _parse_attendance_from_html(html_text: str, abbr_to_member: Dict[str, int]) -> Tuple[set, set]:
+    """
+    Return (attended_ids, absent_ids) from HTML-ish texti content.
+    Rules:
+    - Lines with 'fyrir' credit attendance to the target after 'fyrir'
+    - Lines with 'fjarverandi' or 'boðaði forföll' count as absence for that member
+    - Other 'Name (ABBR)' lines count as attendance for ABBR
+    """
+    attended: set = set()
+    absent: set = set()
+    if not html_text:
+        return attended, absent
+    # Extract section after "Mætt:" until next <h2 or end
+    lower = html_text.lower()
+    start = lower.find("mætt:")
+    if start == -1:
+        return attended, absent
+    section = html_text[start:]
+    # Stop at next heading marker
+    stop_markers = ["<h2", "bókað:", "b\u00f3ka\u00f0:"]
+    stop = len(section)
+    for m in stop_markers:
+        idx = section.lower().find(m)
+        if idx != -1:
+            stop = min(stop, idx)
+    section = section[:stop]
+    parts = re.split(r"<br\\s*/?>", section, flags=re.IGNORECASE)
+    for raw in parts:
+        line = raw.strip()
+        if not line:
+            continue
+        lower_line = line.lower()
+        # absence markers
+        if "fjarverandi" in lower_line or "boðaði forföll" in lower_line or "bo\u00f0a\u00f0i forf\u00f6ll" in lower_line:
+            m = re.search(r"\(([^\)]+)\)", line)
+            if m:
+                abbr = _norm_abbr(m.group(1))
+                mid = abbr_to_member.get(abbr)
+                if mid:
+                    absent.add(mid)
+            continue
+        # proxy: X (...) fyrir Y (...)
+        if "fyrir" in lower_line:
+            target = None
+            m = re.findall(r"\(([^\)]+)\)", line)
+            if len(m) >= 2:
+                target_abbr = _norm_abbr(m[-1])
+                target = abbr_to_member.get(target_abbr)
+            if target:
+                attended.add(target)
+            continue
+        # normal attendance
+        m = re.search(r"\(([^\)]+)\)", line)
+        if m:
+            abbr = _norm_abbr(m.group(1))
+            mid = abbr_to_member.get(abbr)
+            if mid:
+                attended.add(mid)
+    return attended, absent
 
 
 @bp.route("/")
@@ -431,12 +517,94 @@ def members():
         ).scalars().all()
         issue_docs = session.execute(select(IssueDocument)).scalars().all()
         docs_by_nr = session.execute(select(models.ThingskjalalistiThingskjal)).scalars().all()
+        # vote attendance: prefer materialized vote_session; fallback to raw votes
+        vote_sessions = []
+        if manual_models and hasattr(manual_models, "VoteSession"):
+            vote_sessions = session.execute(
+                select(manual_models.VoteSession.vote_num, manual_models.VoteSession.time)
+                .where(manual_models.VoteSession.lthing == lthing)
+            ).all()
+        if not vote_sessions:
+            vote_sessions = session.execute(
+                select(
+                    models.AtkvaedagreidslurAtkvaedagreidsla.attr_atkvaedagreidslunumer,
+                    models.AtkvaedagreidslurAtkvaedagreidsla.leaf_timi,
+                )
+            ).all()
+        all_vote_details = session.execute(
+            select(VoteDetail.vote_num, VoteDetail.voter_id, VoteDetail.vote)
+        ).all()
+        vote_nums_with_votes = {vd[0] for vd in all_vote_details if vd[0] is not None}
+        vote_sessions = [vs for vs in vote_sessions if vs[0] in vote_nums_with_votes]
 
     docs_map = {}
     for d in docs_by_nr:
         attach_flutningsmenn(d)
         if d.attr_skjalsnumer is not None:
             docs_map[int(d.attr_skjalsnumer)] = d
+
+    # Build abbrev map for attendance parsing
+    abbr_to_member: Dict[str, int] = {}
+    for p in people:
+        if p.attr_id is not None and p.leaf_skammstofun:
+            abbr_to_member[_norm_abbr(p.leaf_skammstofun)] = int(p.attr_id)
+
+    # Committee attendance from table populated at ingest; fallback to cached parsing
+    attendance_attended: Dict[int, int] = defaultdict(int)
+    attendance_total: Dict[int, int] = defaultdict(int)
+    used_manual_att = False
+    if manual_models and hasattr(manual_models, "CommitteeAttendance"):
+        att_rows = session.execute(
+            select(manual_models.CommitteeAttendance.member_id,
+                   manual_models.CommitteeAttendance.status,
+                   manual_models.CommitteeAttendance.meeting_num)
+            .where(manual_models.CommitteeAttendance.lthing == lthing)
+        ).all()
+        for mid, status, _ in att_rows:
+            if mid is None:
+                continue
+            if status in ("present", "proxy_present"):
+                attendance_attended[int(mid)] += 1
+                attendance_total[int(mid)] += 1
+            elif status in ("absent_notified",):
+                attendance_total[int(mid)] += 1
+        if att_rows:
+            used_manual_att = True
+    if not used_manual_att:
+        cache_dir = _cache_dir()
+        if cache_dir.exists():
+            for fp in cache_dir.glob("*nefndarfundur*"):
+                try:
+                    root = ET.parse(fp).getroot()
+                    meeting_dt = None
+                    for t in root.iter():
+                        tag = _strip_tag(t.tag)
+                        if tag == "dagurtími" or tag == "dagurtimi":
+                            meeting_dt = _parse_iso((t.text or "").strip())
+                            break
+                        if tag == "dagur":
+                            meeting_dt = parse_date((t.text or "").strip())
+                    if meeting_dt is None:
+                        meeting_dt = parse_date(root.findtext(".//dagur") or "")
+                    texti = None
+                    for t in root.iter():
+                        if _strip_tag(t.tag) == "texti":
+                            texti = t.text or ""
+                            break
+                    if not texti:
+                        continue
+                    attended, absent = _parse_attendance_from_html(texti, abbr_to_member)
+                    for mid in attended:
+                        intervals = intervals_by_member.get(mid, [])
+                        if not intervals or _in_intervals(meeting_dt, intervals):
+                            attendance_attended[mid] += 1
+                            attendance_total[mid] += 1
+                    for mid in absent:
+                        intervals = intervals_by_member.get(mid, [])
+                        if not intervals or _in_intervals(meeting_dt, intervals):
+                            attendance_total[mid] += 1
+                except Exception:
+                    continue
 
     seat_by_member: Dict[int, MemberSeat] = {}
     for seat in seats:
@@ -446,6 +614,19 @@ def members():
         existing_dt = parse_date(existing.inn) if existing else None
         if existing is None or (existing_dt or dt.datetime.min) < inn_dt:
             seat_by_member[key] = seat
+
+    # intervals per member for attendance filtering
+    intervals_by_member: Dict[int, List[Tuple[Optional[dt.datetime], Optional[dt.datetime]]]] = defaultdict(list)
+    for seat in seats:
+        if seat.member_id is None:
+            continue
+        try:
+            mid = int(seat.member_id)
+        except Exception:
+            continue
+        inn_dt = parse_date(seat.inn)
+        ut_dt = parse_date(seat.ut)
+        intervals_by_member[mid].append((inn_dt, ut_dt))
 
     for p in people:
         p.current_seat = seat_by_member.get(int(p.attr_id)) if p.attr_id is not None else None
@@ -507,6 +688,9 @@ def members():
     for p in people:
         if p.attr_id is None:
             continue
+        mid = int(p.attr_id)
+        intervals = intervals_by_member.get(mid, [])
+        has_intervals = bool(intervals)
         issues_for_member = member_issues.get(int(p.attr_id), {})
         items = []
         for mal_key, data in issues_for_member.items():
@@ -530,6 +714,37 @@ def members():
         # sort by malnr
         items.sort(key=lambda x: x["malnr"])
         p.issues = items
+        # vote attendance within seat intervals; exclude notified absences
+        if not vote_sessions:
+            vote_nums_in_interval = set()
+        elif not has_intervals:
+            vote_nums_in_interval = {vm[0] for vm in vote_sessions}
+        else:
+            vote_nums_in_interval = {
+                vn for vn, ts in (
+                    (vm[0], parse_date(vm[1]) or _parse_iso(vm[1]))
+                    for vm in vote_sessions
+                )
+                if _in_intervals(ts, intervals)
+            }
+        member_votes = [
+            vd for vd in all_vote_details
+            if vd[1] == mid and vd[0] in vote_nums_in_interval
+        ]
+        vc = sum(
+            1 for vd in member_votes
+            if vd[2] in ("já", "nei", "greiðir ekki atkvæði") and vd[2] != "boðaði fjarvist"
+        )
+        total_votes_for_member = len(vote_nums_in_interval) if vote_nums_in_interval else len({vs[0] for vs in vote_sessions})
+        p.vote_att_count = vc
+        p.vote_att_total = total_votes_for_member
+        p.vote_att_pct = (vc / total_votes_for_member * 100) if total_votes_for_member else None
+        # committee attendance within seat intervals
+        ca_total = attendance_total.get(mid, 0)
+        ca_att = attendance_attended.get(mid, 0)
+        p.committee_att_count = ca_att
+        p.committee_att_total = ca_total
+        p.committee_att_pct = (ca_att / ca_total * 100) if ca_total else None
 
     def party_for_member(m):
         if getattr(m, "current_seat", None) and m.current_seat.party_name:
