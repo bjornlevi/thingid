@@ -153,6 +153,27 @@ def _in_intervals(ts: Optional[dt.datetime], intervals: List[Tuple[Optional[dt.d
     return False
 
 
+def _effective_intervals(seats: List[Any]) -> Dict[int, List[Tuple[Optional[dt.datetime], Optional[dt.datetime]]]]:
+    """
+    Build intervals per member_id where they are actually seated (ignore varamenn).
+    Only include seats where type is not 'varamaður'.
+    """
+    out: Dict[int, List[Tuple[Optional[dt.datetime], Optional[dt.datetime]]]] = defaultdict(list)
+    for seat in seats:
+        mid = getattr(seat, "member_id", None)
+        if mid is None:
+            continue
+        if getattr(seat, "type", "") and "varama" in str(seat.type).lower():
+            continue
+        inn_dt = parse_date(seat.inn)
+        ut_dt = parse_date(seat.ut)
+        try:
+            out[int(mid)].append((inn_dt, ut_dt))
+        except Exception:
+            continue
+    return out
+
+
 def _fmt_duration(start: Optional[dt.datetime], end: Optional[dt.datetime]) -> Optional[str]:
     if not start or not end:
         return None
@@ -616,17 +637,7 @@ def members():
             seat_by_member[key] = seat
 
     # intervals per member for attendance filtering
-    intervals_by_member: Dict[int, List[Tuple[Optional[dt.datetime], Optional[dt.datetime]]]] = defaultdict(list)
-    for seat in seats:
-        if seat.member_id is None:
-            continue
-        try:
-            mid = int(seat.member_id)
-        except Exception:
-            continue
-        inn_dt = parse_date(seat.inn)
-        ut_dt = parse_date(seat.ut)
-        intervals_by_member[mid].append((inn_dt, ut_dt))
+    intervals_by_member = _effective_intervals(seats)
 
     for p in people:
         p.current_seat = seat_by_member.get(int(p.attr_id)) if p.attr_id is not None else None

@@ -334,10 +334,9 @@ def parse_attendance_text(text: str, abbr_to_id: Dict[str, int]) -> Tuple[List[D
     return attendance, seen_members
 
 
-def populate_vote_sessions_and_attendance(session: Session, all_votes: List[Any], lthing: int, manual_models: Any) -> Dict[int, Dict[str, int]]:
+def populate_vote_sessions_and_attendance(session: Session, lthing: int, manual_models: Any) -> Dict[int, Dict[str, int]]:
     """
     Store vote sessions (vote_num, time) and return per-member vote counts excluding notified absences.
-    all_votes: list of Atkvaedagreidslur rows with attr_atkvaedagreidslunumer and leaf_timi
     """
     counts: Dict[int, Dict[str, int]] = defaultdict(lambda: {"attended": 0, "total": 0})
     if not manual_models or not hasattr(manual_models, "VoteSession"):
@@ -345,15 +344,13 @@ def populate_vote_sessions_and_attendance(session: Session, all_votes: List[Any]
     VoteSession = manual_models.VoteSession
     session.execute(text('DELETE FROM vote_session WHERE lthing=:lt'), {"lt": lthing})
     session.flush()
+    rows = session.execute(text("SELECT attr_atkvaedagreidslunumer, leaf_timi FROM atkvaedagreidslur__atkvaedagreidsla")).fetchall()
     seen_vote_nums = set()
-    for v in all_votes:
-        vote_num = getattr(v, "attr_atkvaedagreidslunumer", None)
-        if vote_num is None:
-            continue
-        if vote_num in seen_vote_nums:
+    for vote_num, leaf_timi in rows:
+        if vote_num is None or vote_num in seen_vote_nums:
             continue
         seen_vote_nums.add(vote_num)
-        session.add(VoteSession(lthing=lthing, vote_num=vote_num, time=getattr(v, "leaf_timi", None)))
+        session.add(VoteSession(lthing=lthing, vote_num=vote_num, time=leaf_timi))
     session.commit()
 
     # Build voter attendance counts from vote_details already stored
@@ -707,7 +704,6 @@ def main() -> int:
         issue_documents: List[Any] = []
         vote_details_to_add: List[Any] = []
         seats_to_add: List[Any] = []
-        all_votes_records: List[Any] = []
         for r in schema_map["resources"]:
             if "error" in r:
                 continue
@@ -976,8 +972,6 @@ def main() -> int:
                 session.add_all(vote_details_to_add)
                 session.commit()
                 print(f"[ok] atkvæðagreiðslur: stored {len(vote_details_to_add)} vote_details")
-            if name == "atkvæðagreiðslur":
-                all_votes_records.extend(records)
             if name == "þingmannalisti" and seats_to_add:
                 session.add_all(seats_to_add)
                 session.commit()
@@ -1000,7 +994,7 @@ def main() -> int:
                 if p.attr_id is not None and p.leaf_skammstofun:
                     abbr_map[_norm_tag(p.leaf_skammstofun)] = int(p.attr_id)
             # vote sessions
-            populate_vote_sessions_and_attendance(session, all_votes_records, lthing, manual_models)
+            populate_vote_sessions_and_attendance(session, lthing, manual_models)
             # committee attendance
             cache_dir = Path(args.cache_dir)
             populate_committee_attendance(session, cache_dir, lthing, abbr_map, manual_models)
