@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+    <div>
+        <p class="eyebrow">Þingmál + Þingskjöl + Atkvæðagreiðslur</p>
+        <h1>Samsett yfirlit fyrir núverandi löggjafarþing</h1>
+        <p class="lede">Stökktu í málin, opnaðu þingskjöl og skoðaðu niðurstöður atkvæðagreiðslna án þess að yfirgefa listann.</p>
+    </div>
+</section>
+
+<section class="stack">
+    <ul class="list large">
+        {% for issue in issues %}
+            <li class="card list-card">
+                <div class="card-head">
+                    <div>
+                        <p class="eyebrow">Mál {{ issue.attr_malsnumer }}</p>
+                        <h2>
+                            <a class="title-link" href="{{ issue.leaf_html or issue.leaf_xml }}">
+                                {{ issue.leaf_malsheiti or "Ónefnt mál" }}
+                            </a>
+                        </h2>
+                        <p class="link-row">
+                            {% if issue.leaf_html %}<a href="{{ issue.leaf_html }}">HTML</a>{% endif %}
+                            {% if issue.leaf_xml %}<a href="{{ issue.leaf_xml }}">XML</a>{% endif %}
+                            {% if issue.leaf_rss %}<a href="{{ issue.leaf_rss }}">RSS</a>{% endif %}
+                        </p>
+                        {% if issue.leaf_malstegund_heiti %}
+                            <span class="pill">{{ issue.leaf_malstegund_heiti }}</span>
+                        {% endif %}
+                    </div>
+                    <div class="meta">
+                        <span>{{ issue.leaf_malstegund_heiti2 or "Tegund ótilgreind" }}</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <details>
+                        <summary>Þingskjöl</summary>
+                        {% set docs = docs_by_mal.get(issue.attr_malsnumer, []) %}
+                        {% if docs %}
+                            <ul class="list">
+                                {% for doc in docs %}
+                                    <li>
+                                        <div>
+                                            <div class="row">
+                                                <strong>
+                                                    <a class="title-link" href="{{ doc.leaf_slod_html or doc.leaf_slod_xml }}">
+                                                        {{ doc.leaf_skjalategund or ("Skjal " ~ doc.attr_skjalsnumer) }}
+                                                    </a>
+                                                    <span class="inline-links">
+                                                        {% if doc.leaf_slod_html %}<a href="{{ doc.leaf_slod_html }}">HTML</a>{% endif %}
+                                                        {% if doc.leaf_slod_pdf %}<a href="{{ doc.leaf_slod_pdf }}">PDF</a>{% endif %}
+                                                        {% if doc.leaf_slod_xml %}<a href="{{ doc.leaf_slod_xml }}">XML</a>{% endif %}
+                                                    </span>
+                                                </strong>
+                                                <span class="muted">{{ doc.leaf_utbyting or "Dagsetning vantar" }}</span>
+                                            </div>
+                                            <p class="muted flutningsmenn">
+                                                Flutningsmenn:
+                                                {% if doc._flutningsmenn %}
+                                                    {% for fm in doc._flutningsmenn %}
+                                                        {% if fm.profile_url %}
+                                                            <a href="{{ fm.profile_url }}">{{ fm.name }}</a>
+                                                        {% else %}
+                                                            {{ fm.name }}
+                                                        {% endif %}
+                                                        {% if fm.role and fm.role != fm.name %} ({{ fm.role }}){% endif %}
+                                                        {% if not loop.last %}, {% endif %}
+                                                    {% endfor %}
+                                                {% else %}
+                                                    upplýsingar vantar
+                                                {% endif %}
+                                            </p>
+                                        </div>
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            <p class="muted">Engin tengd þingskjöl fundust með skýru tengslum við þetta mál.</p>
+                        {% endif %}
+                    </details>
+
+                    <details>
+                        <summary>Atkvæðagreiðslur</summary>
+                        {% set votes = votes_by_mal.get(issue.attr_malsnumer, []) %}
+                        {% if votes %}
+                            <ul class="list">
+                                {% for vote in votes %}
+                                    <li>
+                                        {% set counts = vote_counts.get(vote.attr_atkvaedagreidslunumer) or {} %}
+                                        {% set ja = counts.get('ja',0) %}
+                                        {% set nei = counts.get('nei',0) %}
+                                        {% set greiddu = counts.get('greiddu',0) %}
+                                        {% set total = ja + nei + greiddu %}
+                                        {% set approved = (vote.leaf_samantekt_afgreidsla and 'samþykkt' in vote.leaf_samantekt_afgreidsla|lower) or (total>0 and ja>nei) %}
+                                        {% set rejected = (vote.leaf_samantekt_afgreidsla and 'fellt' in vote.leaf_samantekt_afgreidsla|lower) or (total>0 and nei>ja) %}
+                                        <div class="vote-card {% if approved %}vote-accepted{% elif rejected %}vote-rejected{% endif %}">
+                                            <div class="vote-row">
+                                                <strong>Atkvæðagreiðsla {{ vote.attr_atkvaedagreidslunumer }}</strong>
+                                                <span class="muted">{{ vote.leaf_timi or "Tími ótilgreindur" }}</span>
+                                                {% if vote.leaf_nanar_html %}<a class="muted" href="{{ vote.leaf_nanar_html }}">Nánar</a>{% endif %}
+                                                {% if vote.leaf_thingskjal_slod_xml %}<a class="muted" href="{{ vote.leaf_thingskjal_slod_xml }}">Þingskjal</a>{% endif %}
+                                            </div>
+                                            <div class="vote-row">
+                                                {% if total > 0 %}
+                                                    <span class="pill subtle">Já: {{ ja }}</span>
+                                                    <span class="pill subtle">Nei: {{ nei }}</span>
+                                                    <span class="pill subtle">Greiddu ekki: {{ greiddu }}</span>
+                                                {% else %}
+                                                    <span class="pill subtle">{{ vote.leaf_samantekt_adferd or "Engin kosning" }}</span>
+                                                {% endif %}
+                                                {% if vote.leaf_samantekt_afgreidsla %}
+                                                    <span class="pill neutral">{{ vote.leaf_samantekt_afgreidsla }}</span>
+                                                {% elif approved %}
+                                                    <span class="pill neutral">Samþykkt</span>
+                                                {% elif rejected %}
+                                                    <span class="pill neutral">Fellt</span>
+                                                {% endif %}
+                                                {% if vote.leaf_tegund or vote.leaf_til %}
+                                                    <span class="muted">
+                                                        {{ vote.leaf_tegund }}
+                                                        {% if vote.leaf_til %} → {{ vote.leaf_til }}{% endif %}
+                                                    </span>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            <p class="muted">Engar niðurstöður skráðar enn.</p>
+                        {% endif %}
+                    </details>
+                </div>
+            </li>
+        {% endfor %}
+    </ul>
+</section>
+{% endblock %}

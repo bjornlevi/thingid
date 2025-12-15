@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+    <div>
+        <p class="eyebrow">Þingmannalisti</p>
+        <h1>Þingmenn eftir flokkum</h1>
+        <p class="lede">Síað eftir skammstöfun flokka; opnaðu til að sjá tengla á opinberar síður hvers þingmanns.</p>
+    </div>
+</section>
+
+<section class="stack">
+    {% for party, members in parties.items() %}
+        <details class="panel" open>
+            <summary>{{ party }}</summary>
+            <div class="panel-body">
+                <div class="member-grid">
+                    {% for m in members %}
+                        <div class="member-card">
+                            <div class="member-id">
+                                <img src="https://www.althingi.is/myndir/mynd/thingmenn/{{ m.attr_id }}/org/mynd.jpg" alt="{{ m.leaf_nafn }}" loading="lazy" onerror="this.style.display='none';">
+                            </div>
+                            <div class="member-meta">
+                                <strong>{{ m.leaf_nafn }}</strong>
+                                {% if m.current_seat %}
+                                    <span class="pill subtle">{{ m.current_seat.party_name or "Óflokkaður" }}{% if m.current_seat.type %} · {{ m.current_seat.type }}{% endif %}</span>
+                                    {% if m.current_seat.inn or m.current_seat.ut %}
+                                        <span class="muted">Sæti: {{ m.current_seat.inn or "?" }} — {{ m.current_seat.ut or "nú" }}</span>
+                                    {% endif %}
+                                    {% if m.current_seat.kjordaemi_name %}
+                                        <span class="muted">Kjördæmi: {{ m.current_seat.kjordaemi_name }}</span>
+                                    {% endif %}
+                                {% elif m.leaf_faedingardagur %}
+                                    <span class="muted">Fædd/ur {{ m.leaf_faedingardagur }}</span>
+                                {% endif %}
+                            </div>
+                            <div class="links">
+                                {% if m.attr_id %}
+                                    <a href="https://www.althingi.is/altext/cv/is/cv/{{ m.cv_slug }}/{{ m.attr_id }}/?nfaerslunr={{ m.attr_id }}">Þingstörf</a>
+                                    <a href="https://www.althingi.is/altext/cv/is/hagsmunaskra/?nfaerslunr={{ m.attr_id }}">Hagsmunir</a>
+                                    <a href="https://www.althingi.is/altext/cv/is/nefndaseta/{{ m.cv_slug }}/{{ m.attr_id }}/?nfaerslunr={{ m.attr_id }}">Nefndaseta</a>
+                                {% endif %}
+                            </div>
+                            {% if m.issues %}
+                                <details class="issue-list">
+                                    <summary>Þingmál ({{ m.issues|length }})</summary>
+                                    <ul class="list">
+                                        {% for is in m.issues %}
+                                            <li>
+                                                <div class="row">
+                                                    <strong>Mál {{ is.malnr }}</strong>
+                                                    {% if is.answer %}<a href="{{ is.answer }}">Svar</a>{% endif %}
+                                                </div>
+                                                <div class="row">
+                                                    <a class="title-link" href="{{ is.html or is.xml }}">{{ is.title or "Titill vantar" }}</a>
+                                                </div>
+                                            </li>
+                                        {% endfor %}
+                                    </ul>
+                                </details>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </details>
+    {% endfor %}
+</section>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+    <div>
+        <p class="eyebrow">Nefndir</p>
+        <h1>Yfirlit yfir nefndir</h1>
+        <p class="lede">Sjáðu helstu upplýsingar um nefndir, skammstafanir og skráða nefndarmenn.</p>
+    </div>
+</section>
+
+<section class="stack">
+    {% for nefnd in committees %}
+        <article class="panel">
+            <header class="panel-head">
+                <div>
+                    <p class="eyebrow">Nefnd {{ nefnd.attr_id }}</p>
+                    <h2>{{ nefnd.leaf_heiti }}</h2>
+                </div>
+                <div class="muted">
+                    {% if nefnd.leaf_skammstafanir_longskammstofun %}
+                        {{ nefnd.leaf_skammstafanir_longskammstofun }}
+                    {% elif nefnd.leaf_skammstafanir_stuttskammstofun %}
+                        {{ nefnd.leaf_skammstafanir_stuttskammstofun }}
+                    {% endif %}
+                </div>
+            </header>
+            <div class="panel-body">
+                {% set mems = members_by_nefnd.get(nefnd.attr_id, []) %}
+                {% if mems %}
+                    <p class="muted">Nefndarmenn:</p>
+                    <ul class="list">
+                        {% for m in mems %}
+                            <li>{{ m.name }}{% if m.role %} · {{ m.role }}{% endif %}</li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+                {% if nefnd.leaf_timabil_fyrstathing %}
+                    <p class="muted">Fyrsta þing: {{ nefnd.leaf_timabil_fyrstathing }}</p>
+                {% endif %}
+                {% set issues = issues_by_nefnd.get(nefnd.attr_id, []) %}
+                {% if issues %}
+                    <details>
+                        <summary>Þingmál í umfjöllun ({{ issues|length }})</summary>
+                        <ul class="list">
+                            {% for mal in issues %}
+                                <li>
+                                    <a class="title-link" href="{{ mal.html or mal.xml }}">Mál {{ mal.malnr }}{% if mal.malflokkur %} ({{ mal.malflokkur }}){% endif %}</a>
+                                    {% if mal.title %}<div class="muted">{{ mal.title }}</div>{% endif %}
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    </details>
+                {% endif %}
+            </div>
+        </article>
+    {% endfor %}
+</section>
+{% endblock %}
