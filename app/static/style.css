@@ -98,6 +98,30 @@ details[open] summary { color: var(--accent); }
 .pill.subtle { background: rgba(79, 209, 197, 0.12); border-color: rgba(79, 209, 197, 0.35); }
 .pill.neutral { background: rgba(124, 58, 237, 0.18); border-color: rgba(124, 58, 237, 0.4); }
 
+.filter-row {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin: 0.5rem 0 1rem;
+}
+.filter-pill {
+    cursor: pointer;
+    color: inherit;
+    border: none;
+}
+.filter-pill.disabled {
+    opacity: 0.45;
+}
+.filter-pill.disabled:hover {
+    border-color: var(--border);
+}
+.filter-pill.active {
+    border-color: var(--accent);
+    background: rgba(79, 209, 197, 0.24);
+    box-shadow: 0 0 12px rgba(79, 209, 197, 0.35);
+}
+.filter-pill:hover { border-color: var(--accent); }
+
 .row {
     display: flex;
     justify-content: space-between;

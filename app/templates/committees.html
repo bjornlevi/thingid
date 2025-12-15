@@ -44,8 +44,19 @@
                         <ul class="list">
                             {% for mal in issues %}
                                 <li>
-                                    <a class="title-link" href="{{ mal.html or mal.xml }}">Mál {{ mal.malnr }}{% if mal.malflokkur %} ({{ mal.malflokkur }}){% endif %}</a>
-                                    {% if mal.title %}<div class="muted">{{ mal.title }}</div>{% endif %}
+                                    <a class="title-link" href="{{ mal.html or mal.xml }}">{{ mal.title or ('Mál ' ~ mal.malnr) }}</a>
+                                    <div class="muted">
+                                        Mál {{ mal.malnr }}{% if mal.malflokkur %} ({{ mal.malflokkur }}){% endif %}
+                                    </div>
+                                    {% if mal.status or mal.umsagn_count is not none %}
+                                        <div class="muted">
+                                            {% if mal.status %}{{ mal.status }}{% endif %}
+                                            {% if mal.umsagn_count is not none %}
+                                                {% if mal.status %} · {% endif %}
+                                                <a href="{{ mal.umsagn_url }}" target="_blank" rel="noreferrer">Umsagnir ({{ mal.umsagn_count }})</a>
+                                            {% endif %}
+                                        </div>
+                                    {% endif %}
                                 </li>
                             {% endfor %}
                         </ul>

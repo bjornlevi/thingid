@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-import models
+from . import models
 
 
 def attach_flutningsmenn(doc):

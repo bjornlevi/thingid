@@ -8,10 +8,29 @@
     </div>
 </section>
 
+{% if party_counts %}
+<div class="pill-row filter-row" data-filter="party">
+    {% for name, cnt in party_counts.items() %}
+        <button class="pill neutral filter-pill" data-value="{{ name }}" data-kind="party">{{ name }} ({{ cnt }})</button>
+    {% endfor %}
+</div>
+{% endif %}
+{% if type_counts %}
+<div class="pill-row filter-row" data-filter="type">
+    {% for name, cnt in type_counts.items() %}
+        <button class="pill subtle filter-pill" data-value="{{ name }}" data-kind="type">{{ name }} ({{ cnt }})</button>
+    {% endfor %}
+</div>
+{% endif %}
+
 <section class="stack">
     <ul class="list large">
         {% for issue in issues %}
-            <li class="card list-card">
+            {% set parties = issue_parties.get(issue.attr_malsnumer, []) %}
+            {% set issue_type = issue_types.get(issue.attr_malsnumer) %}
+            <li class="card list-card issue-card"
+                data-parties='{{ parties|tojson }}'
+                data-type='{{ issue_type|default("", true) }}'>
                 <div class="card-head">
                     <div>
                         <p class="eyebrow">Mál {{ issue.attr_malsnumer }}</p>
@@ -80,6 +99,77 @@
                         {% endif %}
                     </details>
 
+                    {% set speeches = speeches_by_mal.get(issue.attr_malsnumer, []) %}
+                    <details>
+                        <summary>Ræður ({{ speeches|length }})</summary>
+                        {% if speeches %}
+                            <ul class="list">
+                                {% for rd in speeches %}
+                                    <li>
+                                        <div class="row speech-row">
+                                            <strong>
+                                                {% if rd.html %}
+                                                    <a class="title-link" href="{{ rd.html }}">{{ rd.speaker }}</a>
+                                                {% else %}
+                                                    {{ rd.speaker }}
+                                                {% endif %}
+                                                {% set has_role = rd.role %}
+                                                {% set has_party = rd.party and rd.party != rd.role %}
+                                                {% if has_role or has_party %}
+                                                    <span class="muted">(
+                                                        {% if has_role %}{{ rd.role }}{% endif %}
+                                                        {% if has_role and has_party %} · {% endif %}
+                                                        {% if has_party %}{{ rd.party }}{% endif %}
+                                                    )</span>
+                                                {% endif %}
+                                            </strong>
+                                            <span class="row-right">
+                                                {% if rd.duration %}<span class="pill subtle">{{ rd.duration }}</span>{% endif %}
+                                                {% if rd.kind %}<span class="pill neutral">{{ rd.kind }}</span>{% endif %}
+                                            </span>
+                                        </div>
+                                        {% set ands = rd.andsvor or [] %}
+                                        {% if ands|length > 0 %}
+                                            <details>
+                                                <summary>Andsvör ({{ ands|length }})</summary>
+                                                <ul class="list">
+                                                    {% for a in ands %}
+                                                        <li class="muted">
+                                                            <div class="row speech-row">
+                                                                <span>
+                                                                    {% if a.html %}
+                                                                        <a class="title-link" href="{{ a.html }}">{{ a.speaker }}</a>
+                                                                    {% else %}
+                                                                        {{ a.speaker }}
+                                                                    {% endif %}
+                                                                    {% set has_role = a.role %}
+                                                                    {% set has_party = a.party and a.party != a.role %}
+                                                                    {% if has_role or has_party %}
+                                                                        <span class="muted">(
+                                                                            {% if has_role %}{{ a.role }}{% endif %}
+                                                                            {% if has_role and has_party %} · {% endif %}
+                                                                            {% if has_party %}{{ a.party }}{% endif %}
+                                                                        )</span>
+                                                                    {% endif %}
+                                                                </span>
+                                                                <span class="row-right">
+                                                                    {% if a.duration %}<span class="pill subtle">{{ a.duration }}</span>{% endif %}
+                                                                    {% if a.kind %}<span class="pill neutral">{{ a.kind }}</span>{% endif %}
+                                                                </span>
+                                                            </div>
+                                                        </li>
+                                                    {% endfor %}
+                                                </ul>
+                                            </details>
+                                        {% endif %}
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            <p class="muted">Engar ræður skráðar.</p>
+                        {% endif %}
+                    </details>
+
                     <details>
                         <summary>Atkvæðagreiðslur</summary>
                         {% set votes = votes_by_mal.get(issue.attr_malsnumer, []) %}
@@ -136,4 +226,8 @@
         {% endfor %}
     </ul>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/filters.js') }}"></script>
 {% endblock %}
