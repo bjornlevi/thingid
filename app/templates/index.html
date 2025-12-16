@@ -2,9 +2,9 @@
 {% block content %}
 <section class="hero">
     <div>
-        <p class="eyebrow">Þingmál + Þingskjöl + Þingmenn + Atkvæðagreiðslur + Nefndir = Alþingi</p>
-        <h1>Samsett yfirlit fyrir núverandi löggjafarþing</h1>
-        <p class="lede">Alls konar upplýsingar um yfirstandandi þing.</p>
+        <p class="eyebrow">Azingm?l + Azingskj?l + Azingmenn + Atkv??agrei?slur + Nefndir = Al?ingi</p>
+        <h1>Samsett yfirlit fyrir n?verandi l?ggjafar?ing</h1>
+        <p class="lede">Alls konar uppl?singar um yfirstandandi ?ing.</p>
     </div>
 </section>
 
@@ -22,7 +22,6 @@
     {% endfor %}
 </div>
 {% endif %}
-
 <div class="pill-row filter-row" data-filter="answer">
     {% set written_label = "fyrirspurn til skrifl. svars" %}
     <button class="pill subtle filter-pill" data-value="{{ written_label }}" data-kind="type">{{ written_label }} ({{ type_counts.get(written_label, 0) if type_counts else 0 }})</button>
@@ -32,7 +31,6 @@
         {% endfor %}
     {% endif %}
 </div>
-
 <section class="stack">
     <ul class="list large">
         {% for issue in issues %}

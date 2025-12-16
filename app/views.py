@@ -12,6 +12,7 @@ import requests
 from flask import Blueprint, current_app, render_template
 from sqlalchemy import select, func, text
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
 from urllib.parse import quote
 
 from . import models
@@ -21,9 +22,13 @@ except Exception:
     manual_models = None
 from .views_helper import (
     current_lthing,
-    parse_date,
     icelandic_sort_key,
     flutningsmenn_primary_id,
+)
+from .utils.dates import (
+    business_days_between,
+    parse_date,
+    prefer_athugasemd_date,
 )
 from .manual_models import IssueDocument, VoteDetail, MemberSeat, NefndMember, attach_flutningsmenn
 
@@ -523,17 +528,7 @@ def index():
                 if is_answer_doc:
                     # prefer date embedded in athugasemd if available
                     attn = getattr(doc, "leaf_athugasemd", None) or ""
-                    found_date = None
-                    if attn:
-                        import re
-                        # try to pick up dates like 10.11.2025 inside athugasemd
-                        m = re.search(r"(\d{2})[.\-/](\d{2})[.\-/](\d{4})", attn)
-                        if m:
-                            try:
-                                found_date = dt.datetime.strptime(m.group(0), "%d.%m.%Y")
-                            except Exception:
-                                found_date = None
-                    cand_dt = found_date or utb
+                    cand_dt = prefer_athugasemd_date(attn) or utb
                     if cand_dt and (answer_dt is None or cand_dt.date() < answer_dt):
                         answer_dt = cand_dt.date()
             # prefer parsed question_dt from docs; otherwise fall back to first_doc_date map
@@ -541,8 +536,7 @@ def index():
                 question_dt = start_dt.date()
             if question_dt:
                 end_date = answer_dt or dt.date.today()
-                delta_days = (end_date - question_dt).days
-                latency_days = int((max(delta_days, 0) * 5) // 7)
+                latency_days = business_days_between(question_dt, end_date)
         issue._answer_latency = latency_days
         speeches_by_mal[int(key)] = _cached_speeches(
             getattr(issue, "leaf_xml", None),
@@ -635,12 +629,22 @@ def members():
         nefnd_members_rows = session.execute(
             select(NefndMember).where(NefndMember.lthing == lthing)
         ).scalars().all()
-        committee_meetings = session.execute(
-            select(manual_models.CommitteeMeeting).where(manual_models.CommitteeMeeting.lthing == lthing)
-        ).scalars().all() if manual_models and hasattr(manual_models, "CommitteeMeeting") else []
-        committee_attendance_rows = session.execute(
-            select(manual_models.CommitteeAttendance).where(manual_models.CommitteeAttendance.lthing == lthing)
-        ).scalars().all() if manual_models and hasattr(manual_models, "CommitteeAttendance") else []
+        committee_meetings = []
+        committee_attendance_rows = []
+        if manual_models and hasattr(manual_models, "CommitteeMeeting"):
+            try:
+                committee_meetings = session.execute(
+                    select(manual_models.CommitteeMeeting).where(manual_models.CommitteeMeeting.lthing == lthing)
+                ).scalars().all()
+            except OperationalError:
+                committee_meetings = []
+        if manual_models and hasattr(manual_models, "CommitteeAttendance"):
+            try:
+                committee_attendance_rows = session.execute(
+                    select(manual_models.CommitteeAttendance).where(manual_models.CommitteeAttendance.lthing == lthing)
+                ).scalars().all()
+            except OperationalError:
+                committee_attendance_rows = []
 
     docs_map = {}
     for d in docs_by_nr:
@@ -919,13 +923,25 @@ def member_attendance(member_id: int):
             select(NefndMember).where(NefndMember.lthing == lthing, NefndMember.member_id == member_id)
         ).scalars().all()
         nefndir = session.execute(select(models.NefndirNefnd)).scalars().all()
-        meetings = session.execute(
-            select(manual_models.CommitteeMeeting).where(manual_models.CommitteeMeeting.lthing == lthing)
-        ).scalars().all() if manual_models and hasattr(manual_models, "CommitteeMeeting") else []
-        attendance_rows = session.execute(
-            select(manual_models.CommitteeAttendance).where(manual_models.CommitteeAttendance.lthing == lthing,
-                                                            manual_models.CommitteeAttendance.member_id == member_id)
-        ).scalars().all() if manual_models and hasattr(manual_models, "CommitteeAttendance") else []
+        meetings = []
+        attendance_rows = []
+        if manual_models and hasattr(manual_models, "CommitteeMeeting"):
+            try:
+                meetings = session.execute(
+                    select(manual_models.CommitteeMeeting).where(manual_models.CommitteeMeeting.lthing == lthing)
+                ).scalars().all()
+            except OperationalError:
+                meetings = []
+        if manual_models and hasattr(manual_models, "CommitteeAttendance"):
+            try:
+                attendance_rows = session.execute(
+                    select(manual_models.CommitteeAttendance).where(
+                        manual_models.CommitteeAttendance.lthing == lthing,
+                        manual_models.CommitteeAttendance.member_id == member_id,
+                    )
+                ).scalars().all()
+            except OperationalError:
+                attendance_rows = []
         people = session.execute(
             select(models.ThingmannalistiThingmadur)
         ).scalars().all()
