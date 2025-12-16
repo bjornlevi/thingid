@@ -139,3 +139,17 @@ class VoteSession(models.Base):
     __table_args__ = (
         models.UniqueConstraint("lthing", "vote_num", name="uq_vote_session_vote_num"),
     )
+
+
+class IssueMetrics(models.Base):
+    __tablename__ = "issue_metrics"
+
+    id = models.Column(models.Integer, primary_key=True, autoincrement=True)
+    lthing = models.Column(models.Integer, index=True)
+    malnr = models.Column(models.Integer, index=True)
+    answer_status = models.Column(models.Text, index=True, nullable=True)  # svarað / ósvarað
+    answer_latency = models.Column(models.Integer, nullable=True)  # business days
+
+    __table_args__ = (
+        models.UniqueConstraint("lthing", "malnr", name="uq_issue_metrics_malnr"),
+    )

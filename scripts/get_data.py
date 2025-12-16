@@ -31,10 +31,19 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 from pathlib import Path
 
+# Ensure project root is on sys.path for local imports (app.*)
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 import requests
 import xml.etree.ElementTree as ET
 from sqlalchemy import UniqueConstraint, create_engine, text, select
 from sqlalchemy.orm import Session
+
+from app.constants import WRITTEN_QUESTION_LABEL, ANSWER_STATUS_SVARAD, ANSWER_STATUS_OSVARAD
+from app.utils.dates import parse_date, business_days_between, prefer_athugasemd_date
+from app.manual_models import IssueMetrics
 
 def _norm_tag(tag: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9]+", "", tag or "")
@@ -524,6 +533,63 @@ def populate_committee_attendance(session: Session, cache_dir: Path, lthing: int
         except Exception:
             continue
     return counts
+
+
+def compute_issue_metrics(session: Session, lthing: int, issue_docs: List[Any], issues: List[Any]) -> List[Any]:
+    """Compute answer status/latency for written questions."""
+    if not manual_models or not hasattr(manual_models, "IssueMetrics"):
+        return []
+    metrics_model = manual_models.IssueMetrics
+
+    docs_by_mal: Dict[int, List[Any]] = defaultdict(list)
+    first_doc_date: Dict[int, Any] = {}
+    for d in issue_docs:
+        if d.malnr is None:
+            continue
+        docs_by_mal[int(d.malnr)].append(d)
+        utb_dt = parse_date(d.utbyting)
+        if utb_dt:
+            existing = first_doc_date.get(int(d.malnr))
+            if existing is None or utb_dt < existing:
+                first_doc_date[int(d.malnr)] = utb_dt
+
+    metrics: List[Any] = []
+    for issue in issues:
+        if getattr(issue, "attr_malsflokkur", None) != "A":
+            continue
+        typ = (issue.leaf_malstegund_heiti2 or issue.leaf_malstegund_heiti or "").strip().casefold()
+        if typ != WRITTEN_QUESTION_LABEL.casefold():
+            continue
+        key = int(issue.attr_malsnumer)
+        question_dt = None
+        answer_dt = None
+        for doc in docs_by_mal.get(key, []):
+            stype = (doc.skjalategund or "").lower()
+            utb = parse_date(doc.utbyting)
+            is_question = ("fsp" in stype) or ("fyrirspurn" in stype)
+            is_answer = ("svar" in stype) and not is_question
+            if is_question and utb:
+                if question_dt is None or utb.date() < question_dt:
+                    question_dt = utb.date()
+            if is_answer:
+                attn_dt = prefer_athugasemd_date(getattr(doc, "athugasemd", None))
+                cand = attn_dt or utb
+                if cand:
+                    if answer_dt is None or cand.date() < answer_dt:
+                        answer_dt = cand.date()
+        if question_dt is None and key in first_doc_date:
+            question_dt = first_doc_date[key].date()
+        status = ANSWER_STATUS_SVARAD if answer_dt else ANSWER_STATUS_OSVARAD
+        latency = None
+        if question_dt:
+            latency = business_days_between(question_dt, answer_dt or dt.date.today())
+        metrics.append(metrics_model(
+            lthing=lthing,
+            malnr=key,
+            answer_status=status,
+            answer_latency=latency,
+        ))
+    return metrics
 
 
 def parse_issue_documents(detail_xml: ET.Element, malflokkur: Optional[str] = None) -> List[Dict[str, Any]]:
