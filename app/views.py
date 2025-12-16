@@ -432,6 +432,7 @@ def index():
             docs_by_mal[d.malnr or -1].append(type("DocProxy", (), {
                 "leaf_skjalategund": d.skjalategund or (f"Skjal {d.skjalnr}" if d.skjalnr else "Skjal"),
                 "leaf_utbyting": d.utbyting,
+                "leaf_athugasemd": getattr(stored, "leaf_athugasemd", None) if stored else None,
                 "leaf_slod_html": d.slod_html or (getattr(stored, "leaf_slod_html", None) if stored else None),
                 "leaf_slod_pdf": d.slod_pdf or (getattr(stored, "leaf_slod_pdf", None) if stored else None),
                 "leaf_slod_xml": d.slod_xml or (getattr(stored, "leaf_slod_xml", None) if stored else None),
@@ -440,11 +441,13 @@ def index():
             }))
             # track first doc date and first answer date
             utb_dt = parse_date(d.utbyting)
-            if utb_dt:
-                if d.malnr and d.malnr not in first_doc_date:
-                    first_doc_date[int(d.malnr)] = utb_dt
+            if utb_dt and d.malnr is not None:
+                malnr_int = int(d.malnr)
+                existing = first_doc_date.get(malnr_int)
+                first_doc_date[malnr_int] = utb_dt if existing is None or utb_dt < existing else existing
                 if d.skjalategund and "svar" in d.skjalategund.lower():
-                    first_answer_date[int(d.malnr)] = min(first_answer_date.get(int(d.malnr), utb_dt), utb_dt) if int(d.malnr) in first_answer_date else utb_dt
+                    ans_existing = first_answer_date.get(malnr_int)
+                    first_answer_date[malnr_int] = utb_dt if ans_existing is None or utb_dt < ans_existing else ans_existing
 
         for malnr, items in list(docs_by_mal.items()):
             items.sort(key=lambda d: parse_date(getattr(d, "leaf_utbyting", None)) or dt.datetime.min)
@@ -488,26 +491,58 @@ def index():
     speeches_by_mal: Dict[int, List[Dict[str, Any]]] = {}
     parties_by_issue: Dict[int, set] = defaultdict(set)
     type_by_issue: Dict[int, str] = {}
+    answered_by_issue: Dict[int, str] = {}
     for issue in issues:
         key = issue.attr_malsnumer
         if key is None:
             continue
-        # answer latency (weekdays between first doc and first svar; if no svar, until today)
+        typ = (issue.leaf_malstegund_heiti2 or issue.leaf_malstegund_heiti or "").strip()
+        typ_lower = typ.lower()
+        # answer latency (weekdays approx = diff * 5/7) only for skriflegar fyrirspurnir
         latency_days = None
-        if int(key) in first_doc_date:
-            start = first_doc_date[int(key)].date()
-            if int(key) in first_answer_date:
-                end = first_answer_date[int(key)].date()
-            else:
-                end = dt.date.today()
-            if end >= start:
-                days = 0
-                cur_d = start
-                while cur_d <= end:
-                    if cur_d.weekday() < 5:
-                        days += 1
-                    cur_d += dt.timedelta(days=1)
-                latency_days = max(days - 1, 0)
+        is_written_question = (
+            getattr(issue, "attr_malsflokkur", None) == "A"
+            and (issue.leaf_malstegund_heiti2 or "").strip().casefold() == "fyrirspurn til skrifl. svars"
+        )
+        if is_written_question:
+            # start with earliest doc date we captured (question doc)
+            start_dt = first_doc_date.get(int(key))
+            docs_for_issue = docs_by_mal.get(int(key), [])
+            question_dt: Optional[dt.date] = None
+            answer_dt: Optional[dt.date] = None
+            for doc in docs_for_issue:
+                stype = (getattr(doc, "leaf_skjalategund", "") or "").lower()
+                utb = parse_date(getattr(doc, "leaf_utbyting", None))
+                is_question_doc = ("fsp" in stype) or ("fyrirspurn" in stype)
+                is_answer_doc = ("svar" in stype) and not is_question_doc
+                # question document
+                if is_question_doc:
+                    if utb and (question_dt is None or utb.date() < question_dt):
+                        question_dt = utb.date()
+                # answer document
+                if is_answer_doc:
+                    # prefer date embedded in athugasemd if available
+                    attn = getattr(doc, "leaf_athugasemd", None) or ""
+                    found_date = None
+                    if attn:
+                        import re
+                        # try to pick up dates like 10.11.2025 inside athugasemd
+                        m = re.search(r"(\d{2})[.\-/](\d{2})[.\-/](\d{4})", attn)
+                        if m:
+                            try:
+                                found_date = dt.datetime.strptime(m.group(0), "%d.%m.%Y")
+                            except Exception:
+                                found_date = None
+                    cand_dt = found_date or utb
+                    if cand_dt and (answer_dt is None or cand_dt.date() < answer_dt):
+                        answer_dt = cand_dt.date()
+            # prefer parsed question_dt from docs; otherwise fall back to first_doc_date map
+            if question_dt is None and start_dt:
+                question_dt = start_dt.date()
+            if question_dt:
+                end_date = answer_dt or dt.date.today()
+                delta_days = (end_date - question_dt).days
+                latency_days = int((max(delta_days, 0) * 5) // 7)
         issue._answer_latency = latency_days
         speeches_by_mal[int(key)] = _cached_speeches(
             getattr(issue, "leaf_xml", None),
@@ -525,13 +560,16 @@ def index():
                     parties_by_issue[int(key)].add(party_name)
                 break
         # store type for counting
-        typ = issue.leaf_malstegund_heiti2 or issue.leaf_malstegund_heiti
         if typ:
             type_by_issue[int(key)] = typ
+        # store answered/unanswered for written questions
+        if is_written_question:
+            answered_by_issue[int(key)] = "svarað" if answer_dt else "ósvarað"
 
     # aggregate counts
     party_counts: Dict[str, int] = defaultdict(int)
     type_counts: Dict[str, int] = defaultdict(int)
+    answer_counts: Dict[str, int] = defaultdict(int)
     issue_parties_map: Dict[int, List[str]] = {}
     for malnr, parties in parties_by_issue.items():
         for p in parties:
@@ -539,6 +577,8 @@ def index():
         issue_parties_map[malnr] = sorted(parties, key=icelandic_sort_key)
     for malnr, typ in type_by_issue.items():
         type_counts[typ] += 1
+    for malnr, status in answered_by_issue.items():
+        answer_counts[status] += 1
 
     return render_template(
         "index.html",
@@ -552,6 +592,8 @@ def index():
         type_counts=dict(sorted(type_counts.items(), key=lambda kv: icelandic_sort_key(kv[0]))),
         issue_parties=issue_parties_map,
         issue_types=type_by_issue,
+        issue_answer_status=answered_by_issue,
+        answer_counts=answer_counts,
     )
 
 

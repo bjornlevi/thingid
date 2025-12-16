@@ -86,6 +86,7 @@ details[open] summary { color: var(--accent); }
 .eyebrow { text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.75rem; color: var(--muted); margin: 0; }
 .lede { color: var(--muted); }
 .muted { color: var(--muted); font-size: 0.9rem; }
+.text-danger { color: #ff6b6b; }
 .pill {
     display: inline-flex;
     padding: 0.15rem 0.5rem;
