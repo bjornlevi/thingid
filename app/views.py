@@ -423,9 +423,10 @@ def index():
                 docs_by_nr[int(doc.attr_skjalsnumer)] = doc
 
         docs_by_mal: Dict[int, List[Any]] = defaultdict(list)
+        first_doc_date: Dict[int, dt.datetime] = {}
+        first_answer_date: Dict[int, dt.datetime] = {}
         # Pre-fetched issue documents are stored in IssueDocument; join to flutningsmenn via skjalnr
         issue_docs = session.execute(select(IssueDocument)).scalars().all()
-        docs_by_mal: Dict[int, List[Any]] = defaultdict(list)
         for d in issue_docs:
             stored = docs_by_nr.get(d.skjalnr or -1)
             docs_by_mal[d.malnr or -1].append(type("DocProxy", (), {
@@ -437,6 +438,13 @@ def index():
                 "_flutningsmenn": getattr(stored, "_flutningsmenn", []),
                 "attr_skjalsnumer": d.skjalnr,
             }))
+            # track first doc date and first answer date
+            utb_dt = parse_date(d.utbyting)
+            if utb_dt:
+                if d.malnr and d.malnr not in first_doc_date:
+                    first_doc_date[int(d.malnr)] = utb_dt
+                if d.skjalategund and "svar" in d.skjalategund.lower():
+                    first_answer_date[int(d.malnr)] = min(first_answer_date.get(int(d.malnr), utb_dt), utb_dt) if int(d.malnr) in first_answer_date else utb_dt
 
         for malnr, items in list(docs_by_mal.items()):
             items.sort(key=lambda d: parse_date(getattr(d, "leaf_utbyting", None)) or dt.datetime.min)
@@ -484,6 +492,23 @@ def index():
         key = issue.attr_malsnumer
         if key is None:
             continue
+        # answer latency (weekdays between first doc and first svar; if no svar, until today)
+        latency_days = None
+        if int(key) in first_doc_date:
+            start = first_doc_date[int(key)].date()
+            if int(key) in first_answer_date:
+                end = first_answer_date[int(key)].date()
+            else:
+                end = dt.date.today()
+            if end >= start:
+                days = 0
+                cur_d = start
+                while cur_d <= end:
+                    if cur_d.weekday() < 5:
+                        days += 1
+                    cur_d += dt.timedelta(days=1)
+                latency_days = max(days - 1, 0)
+        issue._answer_latency = latency_days
         speeches_by_mal[int(key)] = _cached_speeches(
             getattr(issue, "leaf_xml", None),
             cache_dir,

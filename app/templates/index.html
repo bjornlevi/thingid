@@ -39,6 +39,10 @@
                                 {{ issue.leaf_malsheiti or "Ónefnt mál" }}
                             </a>
                         </h2>
+                        {% if issue._answer_latency is not none %}
+                            {% set late = issue._answer_latency > 15 %}
+                            <p class="{{ 'text-danger' if late else 'muted' }}">Svartími: {{ issue._answer_latency }} virkir dagar</p>
+                        {% endif %}
                         <p class="link-row">
                             {% if issue.leaf_html %}<a href="{{ issue.leaf_html }}">HTML</a>{% endif %}
                             {% if issue.leaf_xml %}<a href="{{ issue.leaf_xml }}">XML</a>{% endif %}
