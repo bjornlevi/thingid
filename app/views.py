@@ -218,6 +218,8 @@ def _cached_speeches(
         # speeches are direct children of <ræður>; keep document order
         raedur = root.find(".//ræður")
         nodes = list(raedur) if raedur is not None else []
+        if not nodes:
+            nodes = [n for n in root if _norm_tag(n.tag) == "ræða"]
         base = None
         for r in nodes:
             speaker = None
@@ -1291,3 +1293,109 @@ def committees():
 
 def register(app):
     app.register_blueprint(bp)
+
+
+@bp.route("/agenda")
+def agenda():
+    engine = _get_engine()
+    try:
+        resp = requests.get("https://www.althingi.is/altext/xml/dagskra/thingfundur/", timeout=10)
+        resp.raise_for_status()
+        agenda_xml = resp.text
+    except Exception:
+        agenda_xml = None
+
+    with Session(engine) as session:
+        mal_rows = session.execute(select(models.ThingmalalistiMal)).scalars().all()
+        docs = session.execute(select(IssueDocument)).scalars().all() if manual_models and hasattr(manual_models, "IssueDocument") else []
+        votes = session.execute(select(models.AtkvaedagreidslurAtkvaedagreidsla)).scalars().all()
+
+    docs_by_mal: Dict[tuple, List[Any]] = defaultdict(list)
+    for d in docs:
+        if d.malnr is not None:
+            key = (int(d.malnr), getattr(d, "malflokkur", None))
+            docs_by_mal[key].append(d)
+
+    votes_by_mal: Dict[int, List[Any]] = defaultdict(list)
+    for v in votes:
+        if v.attr_malsnumer is not None:
+            votes_by_mal[int(v.attr_malsnumer)].append(v)
+
+    mal_map = {(int(m.attr_malsnumer), getattr(m, "attr_malsflokkur", None)): m for m in mal_rows if m.attr_malsnumer is not None}
+
+    agenda_items = []
+    fund_info = {}
+    fund_lthing = None
+    if agenda_xml:
+        try:
+            root = ET.fromstring(agenda_xml)
+            fund = root.find(".//þingfundur") or root.find(".//thingfundur")
+            if fund is not None:
+                try:
+                    fund_lthing = int(fund.attrib.get("þingnúmer") or fund.attrib.get("thingnumer") or fund.attrib.get("thingnúmer") or fund.attrib.get("þingnumer"))
+                except Exception:
+                    fund_lthing = None
+                fund_info = {
+                    "fundarheiti": (fund.findtext("fundarheiti") or "").strip(),
+                    "dagurtimi": (fund.findtext(".//dagurtími") or fund.findtext(".//dagurtimi") or "").strip(),
+                }
+                for li in fund.findall(".//dagskrárliður"):
+                    num = li.attrib.get("númer") or li.attrib.get("numer")
+                    mal_elem = li.find("mál") or li.find("mal")
+                    malnr = None
+                    malflokkur = None
+                    title = None
+                    if mal_elem is not None:
+                        try:
+                            malnr = int(mal_elem.attrib.get("málsnúmer") or mal_elem.attrib.get("malsnumer") or mal_elem.attrib.get("malnumer"))
+                        except Exception:
+                            malnr = None
+                        malflokkur = mal_elem.attrib.get("málsflokkur") or mal_elem.attrib.get("malsflokkur")
+                        title = mal_elem.findtext("málsheiti") or mal_elem.findtext("malsheiti")
+                    mal_key = (malnr, malflokkur)
+                    matched = mal_map.get(mal_key)
+                    agenda_items.append({
+                        "number": num,
+                        "malnr": malnr,
+                        "malflokkur": malflokkur,
+                        "title": title or (matched.leaf_malsheiti if matched else None),
+                        "issue": matched,
+                        "docs": docs_by_mal.get(mal_key, []),
+                        "votes": votes_by_mal.get(malnr, []),
+                        "lthing": fund_lthing,
+                    })
+        except Exception:
+            pass
+
+    # attach speeches (cached) for linked issues
+    cache_dir = _cache_dir()
+    speeches_by_mal: Dict[tuple, List[Dict[str, Any]]] = defaultdict(list)
+    issue_meta_cache: Dict[str, list] = {}
+    for item in agenda_items:
+        issue = item.get("issue")
+        speeches: List[Dict[str, Any]] = []
+        primary_xml = issue.leaf_xml if issue and issue.leaf_xml else None
+        sources = []
+        if primary_xml:
+            sources.append(primary_xml)
+        # fallback: bmal XML for B category
+        if item.get("malnr") and item.get("malflokkur") == "B" and item.get("lthing"):
+            sources.append(f"https://www.althingi.is/altext/xml/thingmalalisti/bmal/?lthing={item.get('lthing')}&malnr={item.get('malnr')}")
+        for src in sources:
+            path = _cache_path_for_url(src, cache_dir)
+            if not path.exists():
+                try:
+                    resp = requests.get(src, timeout=10)
+                    resp.raise_for_status()
+                    path.write_text(resp.text, encoding="utf-8")
+                except Exception:
+                    continue
+            speeches = _cached_speeches(src, cache_dir, issue_meta_cache, None)
+            if speeches:
+                break
+        speeches_by_mal[(item["malnr"], item["malflokkur"])] = speeches
+
+    return render_template("agenda.html",
+                           fund_info=fund_info,
+                           items=agenda_items,
+                           speeches_by_mal=speeches_by_mal)

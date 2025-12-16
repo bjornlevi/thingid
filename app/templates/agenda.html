@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">Dagskrá</p>
+    <h1>{{ fund_info.fundarheiti or "Næsti þingfundur" }}</h1>
+    {% if fund_info.dagurtimi %}<p class="muted">{{ fund_info.dagurtimi }}</p>{% endif %}
+  </div>
+</section>
+
+<section class="stack">
+  {% if items %}
+    <ul class="list">
+      {% for it in items %}
+        <li class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Liður {{ it.number }}</p>
+              <h3>{{ it.title or ("Mál " ~ it.malnr) }}</h3>
+            </div>
+            <div class="muted">
+              {% if it.issue %}
+                {% if it.issue.leaf_html %}<a class="pill link" href="{{ it.issue.leaf_html }}">HTML</a>{% endif %}
+                {% if it.issue.leaf_xml %}<a class="pill link" href="{{ it.issue.leaf_xml }}">XML</a>{% endif %}
+              {% endif %}
+            </div>
+          </div>
+          <div class="panel-body">
+            {% set docs = it.docs %}
+            <details>
+              <summary>Þingskjöl ({{ docs|length }})</summary>
+              {% if docs %}
+                <ul class="list">
+                  {% for doc in docs %}
+                    <li>
+                      <div class="row">
+                        <strong><a class="title-link" href="{{ doc.slod_html or doc.slod_xml }}">{{ doc.skjalategund or ("Skjal " ~ doc.skjalnr) }}</a></strong>
+                        <span class="muted">{{ doc.utbyting or "Dagsetning vantar" }}</span>
+                      </div>
+                      <span class="inline-links">
+                        {% if doc.slod_html %}<a href="{{ doc.slod_html }}">HTML</a>{% endif %}
+                        {% if doc.slod_pdf %}<a href="{{ doc.slod_pdf }}">PDF</a>{% endif %}
+                        {% if doc.slod_xml %}<a href="{{ doc.slod_xml }}">XML</a>{% endif %}
+                      </span>
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="muted">Engin skjöl fundust.</p>
+              {% endif %}
+            </details>
+
+            {% set speeches = speeches_by_mal.get((it.malnr, it.malflokkur), []) %}
+            <details>
+              <summary>Ræður ({{ speeches|length }})</summary>
+              {% if speeches %}
+                <ul class="list">
+                  {% for rd in speeches %}
+                    <li>
+                      <div class="row speech-row">
+                        <strong>
+                          {% if rd.html %}
+                            <a class="title-link" href="{{ rd.html }}">{{ rd.speaker }}</a>
+                          {% else %}
+                            {{ rd.speaker }}
+                          {% endif %}
+                          {% set has_role = rd.role %}
+                          {% set has_party = rd.party and rd.party != rd.role %}
+                          {% if has_role or has_party %}
+                            <span class="muted">(
+                              {% if has_role %}{{ rd.role }}{% endif %}
+                              {% if has_role and has_party %} · {% endif %}
+                              {% if has_party %}{{ rd.party }}{% endif %}
+                            )</span>
+                          {% endif %}
+                        </strong>
+                        <span class="row-right">
+                          {% if rd.duration %}<span class="pill subtle">{{ rd.duration }}</span>{% endif %}
+                          {% if rd.kind %}<span class="pill neutral">{{ rd.kind }}</span>{% endif %}
+                        </span>
+                      </div>
+                      {% set ands = rd.andsvor or [] %}
+                      {% if ands|length > 0 %}
+                        <details>
+                          <summary>Andsvör ({{ ands|length }})</summary>
+                          <ul class="list">
+                            {% for a in ands %}
+                              <li class="muted">
+                                <div class="row speech-row">
+                                  <span>
+                                    {% if a.html %}
+                                      <a class="title-link" href="{{ a.html }}">{{ a.speaker }}</a>
+                                    {% else %}
+                                      {{ a.speaker }}
+                                    {% endif %}
+                                    {% set has_role = a.role %}
+                                    {% set has_party = a.party and a.party != a.role %}
+                                    {% if has_role or has_party %}
+                                      <span class="muted">(
+                                        {% if has_role %}{{ a.role }}{% endif %}
+                                        {% if has_role and has_party %} · {% endif %}
+                                        {% if has_party %}{{ a.party }}{% endif %}
+                                      )</span>
+                                    {% endif %}
+                                  </span>
+                                  <span class="row-right">
+                                    {% if a.duration %}<span class="pill subtle">{{ a.duration }}</span>{% endif %}
+                                    {% if a.kind %}<span class="pill neutral">{{ a.kind }}</span>{% endif %}
+                                  </span>
+                                </div>
+                              </li>
+                            {% endfor %}
+                          </ul>
+                        </details>
+                      {% endif %}
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="muted">Engar ræður skráðar.</p>
+              {% endif %}
+            </details>
+
+            {% set votes = it.votes %}
+            <details>
+              <summary>Atkvæðagreiðslur ({{ votes|length }})</summary>
+              {% if votes %}
+                <ul class="list">
+                  {% for vote in votes %}
+                    <li>
+                      <div class="row">
+                        <strong>Atkvæðagreiðsla {{ vote.attr_atkvaedagreidslunumer }}</strong>
+                        <span class="muted">{{ vote.leaf_timi or "Tími ótilgreindur" }}</span>
+                      </div>
+                      {% if vote.leaf_nanar_html %}<a class="pill link" href="{{ vote.leaf_nanar_html }}">Nánar</a>{% endif %}
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="muted">Engar atkvæðagreiðslur skráðar.</p>
+              {% endif %}
+            </details>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">Engin dagskrá fannst.</p>
+  {% endif %}
+</section>
+{% endblock %}

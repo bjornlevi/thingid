@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Alþingi Overview</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -19,6 +20,7 @@
             <a href="{{ url_for('main.index') }}">Þingmál</a>
             <a href="{{ url_for('main.members') }}">Þingmenn</a>
             <a href="{{ url_for('main.committees') }}">Nefndir</a>
+            <a href="{{ url_for('main.agenda') }}">Dagskrá</a>
         </nav>
     </header>
     <main>
