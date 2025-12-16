@@ -22,13 +22,16 @@
     {% endfor %}
 </div>
 {% endif %}
-{% if answer_counts %}
+
 <div class="pill-row filter-row" data-filter="answer">
-    {% for name, cnt in answer_counts.items() %}
-        <button class="pill subtle filter-pill" data-value="{{ name }}" data-kind="answer">{{ name }} ({{ cnt }})</button>
-    {% endfor %}
+    {% set written_label = "fyrirspurn til skrifl. svars" %}
+    <button class="pill subtle filter-pill" data-value="{{ written_label }}" data-kind="type">{{ written_label }} ({{ type_counts.get(written_label, 0) if type_counts else 0 }})</button>
+    {% if answer_counts %}
+        {% for name, cnt in answer_counts.items() %}
+            <button class="pill subtle filter-pill" data-value="{{ name }}" data-kind="answer">{{ name }} ({{ cnt }})</button>
+        {% endfor %}
+    {% endif %}
 </div>
-{% endif %}
 
 <section class="stack">
     <ul class="list large">
