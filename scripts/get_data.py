@@ -24,6 +24,7 @@ import os
 import sys
 import time
 import re
+import unicodedata
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -48,6 +49,25 @@ BASE_CURRENT = "https://www.althingi.is/altext/xml/loggjafarthing/yfirstandandi/
 
 def now_utc_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+def parse_date_str(val: Optional[str]) -> Optional[datetime]:
+    if not val:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(val, fmt)
+        except Exception:
+            continue
+    try:
+        return datetime.fromisoformat(val)
+    except Exception:
+        return None
+
+def _parse_iso(val: Optional[str]) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(val) if val else None
+    except Exception:
+        return None
 
 class Fetcher:
     def __init__(self, timeout: int = 30, sleep_s: float = 0.15, cache_dir: Optional[str] = None, max_age_hours: float = 23, force: bool = False):
@@ -293,35 +313,43 @@ def parse_attendance_text(text: str, abbr_to_id: Dict[str, int]) -> Tuple[List[D
     stop_markers = ["<h2", "bókað:", "b\u00f3ka\u00f0:"]
     stop = len(section)
     for m in stop_markers:
-        idx = section.lower().find(m)
+        idx = section.lower().find(m, 5)
         if idx != -1:
             stop = min(stop, idx)
     section = section[:stop]
-    parts = re.split(r"<br\\s*/?>", section, flags=re.IGNORECASE)
+    parts = re.split(r"<br\s*/?>", section, flags=re.IGNORECASE)
     for raw in parts:
         line = raw.strip()
         if not line:
             continue
         lower_line = line.lower()
-        # notified absence?
-        if "boðaði forföll" in lower_line or "bo\u00f0a\u00f0i forf\u00f6ll" in lower_line or "fjarverandi" in lower_line:
-            m = re.search(r"\(([^\)]+)\)", line)
-            if m:
-                abbr = _norm_tag(m.group(1))
+        # notified absence (singular/plural)
+        if "boðaði forföll" in lower_line or "bo\u00f0a\u00f0i forf\u00f6ll" in lower_line or "bo\u00f0u\u00f0u forf\u00f6ll" in lower_line or "bo\u00f0u\u00f0u forfoll" in lower_line or "bo\u00f0u\u00f0u forfall" in lower_line:
+            abbrs = re.findall(r"\(([^\)]+)\)", line)
+            if not abbrs:
+                continue
+            for ab in abbrs:
+                abbr = _norm_tag(ab)
                 mid = abbr_to_id.get(abbr)
-                if mid:
+                if mid and mid not in seen_members:
                     seen_members.add(mid)
                     attendance.append({"member_id": mid, "status": "absent_notified"})
             continue
-        # proxy: ... fyrir Y (ABBR)
-        if "fyrir" in lower_line:
-            m = re.findall(r"\(([^\)]+)\)", line)
-            if len(m) >= 2:
-                target_abbr = _norm_tag(m[-1])
-                target_mid = abbr_to_id.get(target_abbr)
-                if target_mid:
+        # proxy: ... fyrir Y (ABBR) ... only count target as present
+        if "fyrir" in lower_line or "sat fundinn fyrir" in lower_line:
+            abbrs = re.findall(r"\(([^\)]+)\)", line)
+            target_mid = None
+            proxy_mid = None
+            if abbrs:
+                if len(abbrs) >= 2:
+                    proxy_mid = abbr_to_id.get(_norm_tag(abbrs[0]))
+                    target_mid = abbr_to_id.get(_norm_tag(abbrs[-1]))
+                else:
+                    target_mid = abbr_to_id.get(_norm_tag(abbrs[-1]))
+            if target_mid:
+                if target_mid not in seen_members:
                     seen_members.add(target_mid)
-                    attendance.append({"member_id": target_mid, "status": "proxy_present"})
+                    attendance.append({"member_id": target_mid, "status": "present", "substitute_for_member_id": proxy_mid})
             continue
         # normal attendance
         m = re.search(r"\(([^\)]+)\)", line)
@@ -332,6 +360,42 @@ def parse_attendance_text(text: str, abbr_to_id: Dict[str, int]) -> Tuple[List[D
                 seen_members.add(mid)
             attendance.append({"member_id": mid, "status": "present"})
     return attendance, seen_members
+
+
+def parse_attendance_from_html(text: str, abbr_to_id: Dict[str, int]) -> Tuple[List[Dict[str, Any]], set]:
+    """
+    Wrapper to parse attendance from fundargerð text (often HTML-ish).
+    """
+    return parse_attendance_text(text, abbr_to_id)
+
+
+def parse_arrival_times(text: str, abbr_to_id: Dict[str, int]) -> Dict[int, str]:
+    """
+    Best-effort arrival time extraction per member_id from fundargerð text.
+    Returns {member_id: "HH:MM"}
+    """
+    arrivals: Dict[int, str] = {}
+    if not text:
+        return arrivals
+    lines = re.split(r"<br\s*/?>", text, flags=re.IGNORECASE)
+    for line in lines:
+        lower = unicodedata.normalize("NFKD", line.lower())
+        lower = "".join(ch for ch in lower if not unicodedata.combining(ch))
+        m_time = re.search(r"kl\.\s*(\d{2}:\d{2})", lower)
+        if not m_time:
+            m_time = re.search(r"(\d{2}:\d{2})", lower)
+        if not m_time:
+            continue
+        time_str = m_time.group(1)
+        abbrs = re.findall(r"\(([^\)]+)\)", lower)
+        if not abbrs:
+            continue
+        for ab in abbrs:
+            norm_ab = _norm_tag(ab)
+            mid = abbr_to_id.get(norm_ab)
+            if mid:
+                arrivals[mid] = time_str
+    return arrivals
 
 
 def populate_vote_sessions_and_attendance(session: Session, lthing: int, manual_models: Any) -> Dict[int, Dict[str, int]]:
@@ -405,17 +469,25 @@ def populate_committee_attendance(session: Session, cache_dir: Path, lthing: int
             for t in root.iter():
                 tag = strip_ns(t.tag)
                 if tag == "dagurtími" or tag == "dagurtimi":
-                    meeting_dt = parse_date(t.text) or _parse_iso(t.text)
+                    meeting_dt = parse_date_str(t.text) or _parse_iso(t.text)
                 elif tag == "fundursettur":
                     meeting_dt = meeting_dt or _parse_iso(t.text)
                 elif tag == "fuslit":
                     meeting_end = _parse_iso(t.text)
-            texti = None
+            texti = ""
             for t in root.iter():
                 if strip_ns(t.tag) == "texti":
-                    texti = t.text or ""
-                    break
-            # store meeting
+                    candidate = t.text or ""
+                    if len(candidate) > len(texti):
+                        texti = candidate
+            # store meeting only if fundargerð text is present; otherwise skip counting
+            if not texti:
+                continue
+            attendance, seen_ids = parse_attendance_from_html(texti, abbr_to_id)
+            if not attendance:
+                # no fundargerð attendance -> skip counting this meeting
+                continue
+            arrival_map = parse_arrival_times(texti, abbr_to_id)
             mt = CommitteeMeeting(
                 meeting_num=meeting_num,
                 lthing=lthing,
@@ -427,26 +499,27 @@ def populate_committee_attendance(session: Session, cache_dir: Path, lthing: int
             session.add(mt)
             session.flush()
             meeting_id = mt.id
-            if texti:
-                attendance, seen_ids = parse_attendance_from_html(texti, abbr_to_id)
-                for rec in attendance:
-                    mid = rec.get("member_id")
-                    if not mid:
-                        continue
-                    status = rec.get("status") or "present"
-                    session.add(CommitteeAttendance(
-                        meeting_id=meeting_id,
-                        meeting_num=meeting_num,
-                        lthing=lthing,
-                        member_id=mid,
-                        status=status,
-                        substitute_for_member_id=None,
-                    ))
-                    if status == "present" or status == "proxy_present":
-                        counts[mid]["attended"] += 1
-                        counts[mid]["total"] += 1
-                    elif status == "absent_notified":
-                        counts[mid]["total"] += 1
+            for rec in attendance:
+                mid = rec.get("member_id")
+                if not mid:
+                    continue
+                status = rec.get("status") or "present"
+                arrival_val = arrival_map.get(mid)
+                substitute_for = rec.get("substitute_for_member_id")
+                session.add(CommitteeAttendance(
+                    meeting_id=meeting_id,
+                    meeting_num=meeting_num,
+                    lthing=lthing,
+                    member_id=mid,
+                    status=status,
+                    substitute_for_member_id=substitute_for,
+                    arrival_time=arrival_val,
+                ))
+                if status == "present" or status == "proxy_present":
+                    counts[mid]["attended"] += 1
+                    counts[mid]["total"] += 1
+                elif status == "absent_notified":
+                    counts[mid]["total"] += 1
             session.commit()
         except Exception:
             continue
@@ -640,6 +713,55 @@ def parse_nefndarmenn(xml_root: ET.Element, nefnd_id: int, lthing: int) -> List[
             "lthing": lthing,
         })
     return members
+
+
+def parse_nefndarmenn_all(xml_root: ET.Element, lthing: int) -> Dict[int, List[Dict[str, Any]]]:
+    """Parse the aggregated nefndarmenn feed which contains all committees."""
+    def first_text(node: ET.Element, tag: str) -> Optional[str]:
+        for c in list(node):
+            if strip_ns(c.tag) == tag:
+                return (c.text or "").strip()
+        return None
+
+    per_nefnd: Dict[int, List[Dict[str, Any]]] = {}
+    for nefnd in xml_root.iter():
+        if strip_ns(nefnd.tag) != "nefnd":
+            continue
+        nefnd_id_raw = nefnd.attrib.get("id")
+        try:
+            nefnd_id = int(nefnd_id_raw) if nefnd_id_raw is not None else None
+        except Exception:
+            nefnd_id = None
+        if nefnd_id is None:
+            continue
+        members: List[Dict[str, Any]] = []
+        seen_keys: set[Tuple[Optional[int], Optional[str], Optional[str], Optional[str]]] = set()
+        for nm in list(nefnd):
+            if strip_ns(nm.tag) not in {"nefndarmaður", "nefndarmadur"}:
+                continue
+            try:
+                mid = int(nm.attrib.get("id")) if "id" in nm.attrib else None
+            except Exception:
+                mid = None
+            name = first_text(nm, "nafn")
+            role = first_text(nm, "staða") or first_text(nm, "hlutverk") or first_text(nm, "tegund")
+            inn = first_text(nm, "nefndasetahófst") or first_text(nm, "inn")
+            ut = first_text(nm, "nefndasetulauk") or first_text(nm, "út") or first_text(nm, "ut")
+            dedupe_key = (mid, name, inn, ut)
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            members.append({
+                "member_id": mid,
+                "name": name,
+                "role": role,
+                "inn": inn,
+                "ut": ut,
+                "nefnd_id": nefnd_id,
+                "lthing": lthing,
+            })
+        per_nefnd[nefnd_id] = members
+    return per_nefnd
 
 
 # -----------------------------
@@ -917,20 +1039,45 @@ def main() -> int:
                 NefndMember = manual_models.NefndMember
                 session.execute(text('DELETE FROM nefnd_member WHERE lthing=:lt'), {"lt": lthing})
                 session.flush()
-                for parent in parents:
-                    nefnd_id = getattr(parent, r["attr_map"].get("id"), None) if r.get("attr_map") else None
-                    url_nefndarmenn = getattr(parent, leaf_map.get("nefndarmenn"), None) if leaf_map else None
-                    if not nefnd_id or not url_nefndarmenn:
-                        continue
+                nefndarmenn_url = None
+                if parents and leaf_map:
+                    candidate = getattr(parents[0], leaf_map.get("nefndarmenn"), None)
+                    if candidate:
+                        nefndarmenn_url = candidate
+                if nefndarmenn_url and "nnefnd=" in nefndarmenn_url:
+                    nefndarmenn_url = nefndarmenn_url.replace("nnefnd=", "nefnd=")
+                if nefndarmenn_url:
+                    nefndarmenn_url = norm_url(url, nefndarmenn_url)
+                if not nefndarmenn_url:
+                    print("[warn] no nefndarmenn url found")
+                else:
                     try:
-                        xml_root = parse_xml(fetcher.get(url_nefndarmenn), url_nefndarmenn)
-                        parsed = parse_nefndarmenn(xml_root, nefnd_id, lthing)
-                        if parsed:
-                            session.add_all([NefndMember(**p) for p in parsed])
+                        xml_root = parse_xml(fetcher.get(nefndarmenn_url), nefndarmenn_url)
+                        parsed_map = parse_nefndarmenn_all(xml_root, lthing)
+                        nefnd_rows = []
+                        seen_nm_keys: set[Tuple[int, int, Optional[int], Optional[str], Optional[str]]] = set()
+                        for parent in parents:
+                            nefnd_id = getattr(parent, r["attr_map"].get("id"), None) if r.get("attr_map") else None
+                            try:
+                                nefnd_id_int = int(nefnd_id) if nefnd_id is not None else None
+                            except Exception:
+                                nefnd_id_int = None
+                            if nefnd_id_int is None:
+                                continue
+                            entries = parsed_map.get(nefnd_id_int, [])
+                            if entries:
+                                for p in entries:
+                                    key = (lthing, nefnd_id_int, p.get("member_id"), p.get("name"), p.get("inn"))
+                                    if key in seen_nm_keys:
+                                        continue
+                                    seen_nm_keys.add(key)
+                                    nefnd_rows.append(NefndMember(**p))
+                                print(f"[ok] nefnd {nefnd_id_int}: stored {len(entries)} nefndarmenn")
+                        if nefnd_rows:
+                            session.add_all(nefnd_rows)
                             session.commit()
-                            print(f"[ok] nefnd {nefnd_id}: stored {len(parsed)} nefndarmenn")
                     except Exception as e:
-                        print(f"[warn] failed to fetch nefndarmenn for nefnd {nefnd_id}: {e}")
+                        print(f"[warn] failed to fetch aggregated nefndarmenn: {e}")
 
             session.commit()
             inserted = len(records) - skipped_dupes

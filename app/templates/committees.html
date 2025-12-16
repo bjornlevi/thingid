@@ -30,7 +30,13 @@
                     <p class="muted">Nefndarmenn:</p>
                     <ul class="list">
                         {% for m in mems %}
-                            <li>{{ m.name }}{% if m.role %} · {{ m.role }}{% endif %}</li>
+                            {% set att = attendance_by_nm.get((nefnd.attr_id, m.member_id)) %}
+                            <li>
+                                {{ m.name }}{% if m.role %} · {{ m.role }}{% endif %}
+                                {% if att %}
+                                    <span class="muted"> (Mæting: {{ att.attended }}/{{ att.total }})</span>
+                                {% endif %}
+                            </li>
                         {% endfor %}
                     </ul>
                 {% endif %}

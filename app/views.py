@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from flask import Blueprint, current_app, render_template
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.orm import Session
 from urllib.parse import quote
 
@@ -144,11 +144,16 @@ def _parse_iso(ts: Optional[str]) -> Optional[dt.datetime]:
 def _in_intervals(ts: Optional[dt.datetime], intervals: List[Tuple[Optional[dt.datetime], Optional[dt.datetime]]]) -> bool:
     if ts is None:
         return False
+    ts_date = ts.date()
     for inn, ut in intervals:
-        if inn and ts < inn:
-            continue
-        if ut and ts > ut:
-            continue
+        if inn:
+            inn_date = inn.date() if isinstance(inn, dt.datetime) else inn
+            if ts_date < inn_date:
+                continue
+        if ut:
+            ut_date = ut.date() if isinstance(ut, dt.datetime) else ut
+            if ts_date > ut_date:
+                continue
         return True
     return False
 
@@ -163,7 +168,8 @@ def _effective_intervals(seats: List[Any]) -> Dict[int, List[Tuple[Optional[dt.d
         mid = getattr(seat, "member_id", None)
         if mid is None:
             continue
-        if getattr(seat, "type", "") and "varama" in str(seat.type).lower():
+        seat_type = str(getattr(seat, "type", "") or "").lower()
+        if seat_type.strip() == "varamaður":
             continue
         inn_dt = parse_date(seat.inn)
         ut_dt = parse_date(seat.ut)
@@ -557,6 +563,15 @@ def members():
         ).all()
         vote_nums_with_votes = {vd[0] for vd in all_vote_details if vd[0] is not None}
         vote_sessions = [vs for vs in vote_sessions if vs[0] in vote_nums_with_votes]
+        nefnd_members_rows = session.execute(
+            select(NefndMember).where(NefndMember.lthing == lthing)
+        ).scalars().all()
+        committee_meetings = session.execute(
+            select(manual_models.CommitteeMeeting).where(manual_models.CommitteeMeeting.lthing == lthing)
+        ).scalars().all() if manual_models and hasattr(manual_models, "CommitteeMeeting") else []
+        committee_attendance_rows = session.execute(
+            select(manual_models.CommitteeAttendance).where(manual_models.CommitteeAttendance.lthing == lthing)
+        ).scalars().all() if manual_models and hasattr(manual_models, "CommitteeAttendance") else []
 
     docs_map = {}
     for d in docs_by_nr:
@@ -570,62 +585,82 @@ def members():
         if p.attr_id is not None and p.leaf_skammstofun:
             abbr_to_member[_norm_abbr(p.leaf_skammstofun)] = int(p.attr_id)
 
-    # Committee attendance from table populated at ingest; fallback to cached parsing
+    # intervals per member for attendance filtering
+    intervals_by_member = _effective_intervals(seats)
+
+    # Committee attendance: compute totals using committee membership intervals and meeting schedule
     attendance_attended: Dict[int, int] = defaultdict(int)
     attendance_total: Dict[int, int] = defaultdict(int)
-    used_manual_att = False
-    if manual_models and hasattr(manual_models, "CommitteeAttendance"):
-        att_rows = session.execute(
-            select(manual_models.CommitteeAttendance.member_id,
-                   manual_models.CommitteeAttendance.status,
-                   manual_models.CommitteeAttendance.meeting_num)
-            .where(manual_models.CommitteeAttendance.lthing == lthing)
-        ).all()
-        for mid, status, _ in att_rows:
-            if mid is None:
+    committee_intervals: Dict[int, Dict[int, List[Tuple[Optional[dt.date], Optional[dt.date]]]]] = defaultdict(lambda: defaultdict(list))
+    official_members: Dict[int, set] = defaultdict(set)
+
+    def role_rank(role: Optional[str]) -> int:
+        if not role:
+            return 99
+        lr = role.lower().replace(".", "").strip()
+        if "formaður" in lr and "vara" not in lr:
+            return 0
+        if lr.startswith("1 varaformaður") or "1. varaformaður" in lr or "1 varaformadur" in lr:
+            return 1
+        if lr.startswith("2 varaformaður") or "2. varaformaður" in lr or "2 varaformadur" in lr:
+            return 2
+        if "nefndarmaður" in lr:
+            return 3
+        if "áheyrnarfulltrú" in lr:
+            return 4
+        if "varamaður" in lr:
+            return 5
+        return 99
+
+    for nm in nefnd_members_rows:
+        if nm.nefnd_id is None or nm.member_id is None:
+            continue
+        rank = role_rank(nm.role)
+        if rank > 3:
+            continue  # only official members
+        nid = int(nm.nefnd_id)
+        mid = int(nm.member_id)
+        inn_dt = parse_date(nm.inn)
+        ut_dt = parse_date(nm.ut)
+        committee_intervals[nid][mid].append((inn_dt.date() if inn_dt else None, ut_dt.date() if ut_dt else None))
+        official_members[nid].add(mid)
+
+    present_map: Dict[int, set] = defaultdict(set)
+    for ca in committee_attendance_rows:
+        if ca.meeting_id is None or ca.member_id is None:
+            continue
+        if ca.status in ("present", "proxy_present"):
+            present_map[int(ca.meeting_id)].add(int(ca.member_id))
+    meetings_info: List[Tuple[int, Optional[int], Optional[dt.datetime]]] = []
+    for mt in committee_meetings:
+        dt_val = _parse_iso(mt.start_time) or parse_date(mt.start_time)
+        meetings_info.append((mt.id, mt.nefnd_id, dt_val))
+
+    def in_date_interval(d: dt.date, intervals: List[Tuple[Optional[dt.date], Optional[dt.date]]]) -> bool:
+        if not intervals:
+            return True
+        for inn, ut in intervals:
+            if inn and d < inn:
                 continue
-            if status in ("present", "proxy_present"):
-                attendance_attended[int(mid)] += 1
-                attendance_total[int(mid)] += 1
-            elif status in ("absent_notified",):
-                attendance_total[int(mid)] += 1
-        if att_rows:
-            used_manual_att = True
-    if not used_manual_att:
-        cache_dir = _cache_dir()
-        if cache_dir.exists():
-            for fp in cache_dir.glob("*nefndarfundur*"):
-                try:
-                    root = ET.parse(fp).getroot()
-                    meeting_dt = None
-                    for t in root.iter():
-                        tag = _strip_tag(t.tag)
-                        if tag == "dagurtími" or tag == "dagurtimi":
-                            meeting_dt = _parse_iso((t.text or "").strip())
-                            break
-                        if tag == "dagur":
-                            meeting_dt = parse_date((t.text or "").strip())
-                    if meeting_dt is None:
-                        meeting_dt = parse_date(root.findtext(".//dagur") or "")
-                    texti = None
-                    for t in root.iter():
-                        if _strip_tag(t.tag) == "texti":
-                            texti = t.text or ""
-                            break
-                    if not texti:
-                        continue
-                    attended, absent = _parse_attendance_from_html(texti, abbr_to_member)
-                    for mid in attended:
-                        intervals = intervals_by_member.get(mid, [])
-                        if not intervals or _in_intervals(meeting_dt, intervals):
-                            attendance_attended[mid] += 1
-                            attendance_total[mid] += 1
-                    for mid in absent:
-                        intervals = intervals_by_member.get(mid, [])
-                        if not intervals or _in_intervals(meeting_dt, intervals):
-                            attendance_total[mid] += 1
-                except Exception:
-                    continue
+            if ut and d > ut:
+                continue
+            return True
+        return False
+
+    for meeting_id, nefnd_id, dt_val in meetings_info:
+        if nefnd_id is None or dt_val is None:
+            continue
+        d = dt_val.date()
+        members = official_members.get(int(nefnd_id), set())
+        for mid in members:
+            if not in_date_interval(d, committee_intervals.get(int(nefnd_id), {}).get(mid, [])):
+                continue
+            intervals = intervals_by_member.get(mid, [])
+            if intervals and not _in_intervals(dt_val, intervals):
+                continue
+            attendance_total[mid] += 1
+            if mid in present_map.get(meeting_id, set()):
+                attendance_attended[mid] += 1
 
     seat_by_member: Dict[int, MemberSeat] = {}
     for seat in seats:
@@ -777,6 +812,242 @@ def members():
     return render_template("members.html", parties=parties, current_lthing=lthing)
 
 
+def _fundargerd_link(raw_xml: str) -> Optional[str]:
+    try:
+        root = ET.fromstring(raw_xml)
+        # Prefer fundargerð html link
+        for node in root.iter():
+            if _strip_tag(node.tag) == "fundargerð":
+                html = None
+                xml = None
+                for c in list(node):
+                    if _strip_tag(c.tag) == "html" and (c.text or "").strip():
+                        html = c.text.strip()
+                    if _strip_tag(c.tag) == "xml" and (c.text or "").strip():
+                        xml = c.text.strip()
+                if html:
+                    return html
+                if xml:
+                    return xml
+        # If no explicit fundargerð link, do not fall back to dagskrá html
+    except Exception:
+        return None
+    return None
+
+
+@bp.route("/members/<int:member_id>/attendance")
+def member_attendance(member_id: int):
+    engine = _get_engine()
+    with Session(engine) as session:
+        member = session.execute(
+            select(models.ThingmannalistiThingmadur).where(models.ThingmannalistiThingmadur.attr_id == member_id)
+        ).scalar_one_or_none()
+        lthing = current_lthing(session)
+        seats = session.execute(
+            select(MemberSeat).where(MemberSeat.lthing == lthing, MemberSeat.member_id == member_id)
+        ).scalars().all()
+        nefnd_members = session.execute(
+            select(NefndMember).where(NefndMember.lthing == lthing, NefndMember.member_id == member_id)
+        ).scalars().all()
+        nefndir = session.execute(select(models.NefndirNefnd)).scalars().all()
+        meetings = session.execute(
+            select(manual_models.CommitteeMeeting).where(manual_models.CommitteeMeeting.lthing == lthing)
+        ).scalars().all() if manual_models and hasattr(manual_models, "CommitteeMeeting") else []
+        attendance_rows = session.execute(
+            select(manual_models.CommitteeAttendance).where(manual_models.CommitteeAttendance.lthing == lthing,
+                                                            manual_models.CommitteeAttendance.member_id == member_id)
+        ).scalars().all() if manual_models and hasattr(manual_models, "CommitteeAttendance") else []
+        people = session.execute(
+            select(models.ThingmannalistiThingmadur)
+        ).scalars().all()
+
+    if member is None:
+        return "Member not found", 404
+
+    intervals_by_member = _effective_intervals(seats)
+    member_intervals = intervals_by_member.get(member_id, [])
+
+    def role_rank(role: Optional[str]) -> int:
+        if not role:
+            return 99
+        lr = role.lower().replace(".", "").strip()
+        if "formaður" in lr and "vara" not in lr:
+            return 0
+        if lr.startswith("1 varaformaður") or "1. varaformaður" in lr or "1 varaformadur" in lr:
+            return 1
+        if lr.startswith("2 varaformaður") or "2. varaformaður" in lr or "2 varaformadur" in lr:
+            return 2
+        if "nefndarmaður" in lr:
+            return 3
+        if "áheyrnarfulltrú" in lr:
+            return 4
+        if "varamaður" in lr:
+            return 5
+        return 99
+
+    committee_intervals: Dict[int, List[Tuple[Optional[dt.date], Optional[dt.date]]]] = defaultdict(list)
+    for nm in nefnd_members:
+        rrank = role_rank(nm.role)
+        if rrank > 3:
+            continue
+        inn_dt = parse_date(nm.inn)
+        ut_dt = parse_date(nm.ut)
+        committee_intervals[int(nm.nefnd_id)].append((inn_dt.date() if inn_dt else None, ut_dt.date() if ut_dt else None))
+
+    present_map = {ar.meeting_id for ar in attendance_rows if ar.status in ("present", "proxy_present")}
+    arrival_map = {ar.meeting_id: ar.arrival_time for ar in attendance_rows if getattr(ar, "arrival_time", None)}
+    nefnd_name_map = {int(n.attr_id): (n.leaf_heiti or f"Nefnd {n.attr_id}") for n in nefndir if n.attr_id is not None}
+    abbr_map = {_norm_abbr(p.leaf_skammstofun): int(p.attr_id) for p in people if p.attr_id is not None and p.leaf_skammstofun}
+
+    def _extract_member_timings(mt: Any) -> Tuple[Optional[dt.datetime], Optional[str]]:
+        try:
+            root = ET.fromstring(mt.raw_xml)
+        except Exception:
+            return None, None
+        texti = ""
+        for t in root.iter():
+            if _strip_tag(t.tag) == "texti":
+                candidate = t.text or ""
+                if len(candidate) > len(texti):
+                    texti = candidate
+        if not texti:
+            return None, None
+        abbr = _norm_abbr(member.leaf_skammstofun) if member and member.leaf_skammstofun else None
+        date_part = (_parse_iso(mt.start_time) or parse_date(mt.start_time) or dt.datetime.now()).date()
+        arrival_dt = None
+        leave_note = None
+        lines = re.split(r"<br\s*/?>", texti, flags=re.IGNORECASE)
+        name_lower = (member.leaf_nafn or "").lower()
+        name_norm = unicodedata.normalize("NFKD", name_lower)
+        name_norm = "".join(ch for ch in name_norm if not unicodedata.combining(ch))
+        abbr_norm = abbr_ascii = None
+        if member and member.leaf_skammstofun:
+            abbr_ascii = _norm_abbr(member.leaf_skammstofun)
+        for line in lines:
+            l = line.lower()
+            l_ascii = unicodedata.normalize("NFKD", l)
+            l_ascii = "".join(ch for ch in l_ascii if not unicodedata.combining(ch))
+            # arrival time after abbr or name
+            name_hit = False
+            if name_norm:
+                first = name_norm.split()[0]
+                if first and first in l_ascii:
+                    name_hit = True
+            abbr_hit = False
+            if abbr_ascii:
+                if f"({abbr_ascii})" in l_ascii or abbr_ascii in l_ascii:
+                    abbr_hit = True
+            if name_hit or abbr_hit:
+                m = re.search(r"kl\.?\s*(\d{2}:\d{2})", l_ascii, flags=re.IGNORECASE)
+                if not m:
+                    m = re.search(r"(\d{2}:\d{2})", l_ascii)
+                if m and not arrival_dt:
+                    try:
+                        t = dt.datetime.strptime(m.group(1), "%H:%M").time()
+                        arrival_dt = dt.datetime.combine(date_part, t)
+                    except Exception:
+                        pass
+            # departure note
+            if name_norm and name_norm.split()[0] in l_ascii and "vék af fundi" in l:
+                m2 = re.search(r"(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})", line)
+                if m2:
+                    leave_note = f"Vék af fundi {m2.group(1)}–{m2.group(2)}"
+        # Fallback: scan whole text for abbr/name then time
+        if not arrival_dt:
+            full_ascii = unicodedata.normalize("NFKD", texti.lower())
+            full_ascii = "".join(ch for ch in full_ascii if not unicodedata.combining(ch))
+            targets = []
+            if abbr_ascii:
+                targets.append(abbr_ascii)
+            if name_norm:
+                parts = name_norm.split()
+                if parts:
+                    targets.append(parts[0])
+            for tgt in targets:
+                idx = full_ascii.find(tgt)
+                if idx == -1:
+                    continue
+                segment = full_ascii[idx: idx + 120]  # look a bit ahead
+                m = re.search(r"kl\.?\s*(\d{2}:\d{2})", segment)
+                if not m:
+                    m = re.search(r"(\d{2}:\d{2})", segment)
+                if m:
+                    try:
+                        t = dt.datetime.strptime(m.group(1), "%H:%M").time()
+                        arrival_dt = dt.datetime.combine(date_part, t)
+                        break
+                    except Exception:
+                        pass
+        return arrival_dt, leave_note
+
+    def in_date_interval(d: dt.date, intervals: List[Tuple[Optional[dt.date], Optional[dt.date]]]) -> bool:
+        if not intervals:
+            return True
+        for inn, ut in intervals:
+            if inn and d < inn:
+                continue
+            if ut and d > ut:
+                continue
+            return True
+        return False
+
+    records = []
+    attended = 0
+    total = 0
+    for mt in meetings:
+        if mt.nefnd_id not in committee_intervals:
+            continue
+        dt_val = _parse_iso(mt.start_time) or parse_date(mt.start_time)
+        if not dt_val:
+            continue
+        d = dt_val.date()
+        if not in_date_interval(d, committee_intervals[int(mt.nefnd_id)]):
+            continue
+        if member_intervals and not _in_intervals(dt_val, member_intervals):
+            continue
+        status = "attended" if mt.id in present_map else "missed"
+        arrival_dt = None
+        leave_note = None
+        if mt.id in arrival_map and arrival_map[mt.id]:
+            try:
+                t = dt.datetime.strptime(arrival_map[mt.id], "%H:%M").time()
+                arrival_dt = dt.datetime.combine(d, t)
+            except Exception:
+                arrival_dt = None
+        if arrival_dt is None:
+            arrival_dt, leave_note = _extract_member_timings(mt)
+        meeting_start = _parse_iso(mt.start_time) or parse_date(mt.start_time)
+        if status == "attended" and arrival_dt is None and meeting_start:
+            arrival_dt = meeting_start  # fallback to start time if not parsed
+        is_late = bool(arrival_dt and meeting_start and arrival_dt > meeting_start)
+        total += 1
+        if status == "attended":
+            attended += 1
+        records.append({
+            "meeting_num": mt.meeting_num,
+            "nefnd_id": mt.nefnd_id,
+            "nefnd_name": nefnd_name_map.get(int(mt.nefnd_id)) if mt.nefnd_id is not None else None,
+            "time": dt_val,
+            "status": status,
+            "fundargerd": _fundargerd_link(mt.raw_xml),
+            "arrival": arrival_dt,
+            "leave_note": leave_note,
+            "is_late": is_late,
+        })
+
+    records.sort(key=lambda r: r["time"])
+    pct = (attended / total * 100) if total else None
+
+    return render_template("member_attendance.html",
+                           member=member,
+                           current_lthing=lthing,
+                           attended=attended,
+                           total=total,
+                           pct=pct,
+                           records=records)
+
+
+
 @bp.route("/committees")
 def committees():
     engine = _get_engine()
@@ -785,25 +1056,201 @@ def committees():
             select(models.NefndirNefnd).order_by(models.NefndirNefnd.leaf_heiti)
         ).scalars().all()
         lthing = current_lthing(session)
-        members = session.execute(
-            select(NefndMember).where(NefndMember.lthing == lthing)
-        ).scalars().all()
         mal_rows = session.execute(
             select(models.ThingmalalistiMal)
         ).scalars().all()
         votes = session.execute(
             select(models.AtkvaedagreidslurAtkvaedagreidsla)
         ).scalars().all()
+        meeting_rows = session.execute(
+            select(manual_models.CommitteeMeeting).where(manual_models.CommitteeMeeting.lthing == lthing)
+        ).scalars().all() if manual_models else []
+        attendance_rows = session.execute(
+            text(
+                """
+                SELECT cm.nefnd_id, cm.start_time, ca.member_id, ca.status
+                FROM committee_attendance ca
+                JOIN committee_meeting cm ON ca.meeting_id = cm.id
+                WHERE cm.lthing = :lt
+                """
+            ),
+            {"lt": lthing},
+        ).fetchall()
+        people = session.execute(select(models.ThingmannalistiThingmadur)).scalars().all()
+        nefnd_members_rows = session.execute(
+            select(NefndMember).where(NefndMember.lthing == lthing)
+        ).scalars().all()
+        member_seats = session.execute(
+            select(manual_models.MemberSeat).where(manual_models.MemberSeat.lthing == lthing)
+        ).scalars().all() if manual_models else []
 
-    members_by_nefnd: Dict[int, List[NefndMember]] = defaultdict(list)
-    for m in members:
-        if m.nefnd_id is not None:
-            members_by_nefnd[int(m.nefnd_id)].append(m)
+    member_name: Dict[int, str] = {}
+    for p in people:
+        if p.attr_id is not None:
+            member_name[int(p.attr_id)] = p.leaf_nafn or ""
 
     mal_by_key = {(m.attr_malsnumer, getattr(m, "attr_malsflokkur", None)): m for m in mal_rows if m.attr_malsnumer is not None}
 
     def norm(name: str) -> str:
         return (name or "").strip().lower()
+
+    def _parse_dt(val: Optional[str]) -> Optional[dt.datetime]:
+        if not val:
+            return None
+        try:
+            return dt.datetime.fromisoformat(val)
+        except Exception:
+            return parse_date(val)
+
+    meeting_dates_by_nefnd: Dict[int, List[dt.datetime]] = defaultdict(list)
+    for m in meeting_rows:
+        if m.nefnd_id is None:
+            continue
+        dt_val = _parse_dt(m.start_time)
+        if dt_val:
+            meeting_dates_by_nefnd[int(m.nefnd_id)].append(dt_val)
+
+    seat_intervals: Dict[int, List[Tuple[Optional[dt.date], Optional[dt.date]]]] = defaultdict(list)
+    for seat in member_seats:
+        if seat.member_id is None:
+            continue
+        inn_dt = parse_date(seat.inn)
+        ut_dt = parse_date(seat.ut)
+        seat_intervals[int(seat.member_id)].append((inn_dt.date() if inn_dt else None, ut_dt.date() if ut_dt else None))
+
+    def active_on(member_id: int, nefnd_id: int, when: dt.date) -> bool:
+        # Must be active both in Alþingi seat (seat_intervals) and committee seat (committee_intervals)
+        intervals_a = seat_intervals.get(member_id, [])
+        intervals_c = committee_intervals.get(nefnd_id, {}).get(member_id, [])
+        def match(intervals):
+            if not intervals:
+                return True
+            for inn, ut in intervals:
+                if inn and when < inn:
+                    continue
+                if ut and when > ut:
+                    continue
+                return True
+            return False
+        return match(intervals_a) and match(intervals_c)
+
+    attendance_by_nm: Dict[tuple, Dict[str, int]] = {}
+    members_by_nefnd: Dict[int, List[Any]] = defaultdict(list)
+    seen_members_nefnd: Dict[int, set] = defaultdict(set)
+    official_members: Dict[int, set] = defaultdict(set)
+    committee_intervals: Dict[int, Dict[int, List[Tuple[Optional[dt.date], Optional[dt.date]]]]] = defaultdict(lambda: defaultdict(list))
+
+    def role_rank(role: Optional[str]) -> int:
+        if not role:
+            return 99
+        lr = role.lower().replace(".", "").strip()
+        if "formaður" in lr and "vara" not in lr:
+            return 0
+        if lr.startswith("1 varaformaður") or "1. varaformaður" in lr or "1 varaformadur" in lr:
+            return 1
+        if lr.startswith("2 varaformaður") or "2. varaformaður" in lr or "2 varaformadur" in lr:
+            return 2
+        if "nefndarmaður" in lr:
+            return 3
+        if "áheyrnarfulltrú" in lr:
+            return 4
+        if "varamaður" in lr:
+            return 5
+        return 99
+
+    # Pick latest seat (by start date, then latest end/open, then best rank) per member per committee; capture committee-specific intervals
+    best_roles: Dict[int, Dict[int, Tuple[int, str, str, Optional[dt.date], Optional[dt.date]]]] = defaultdict(dict)  # nefnd_id -> member_id -> (rank, role, name, inn_date, ut_date)
+    for nm in nefnd_members_rows:
+        if nm.nefnd_id is None or nm.member_id is None:
+            continue
+        nid = int(nm.nefnd_id)
+        mid = int(nm.member_id)
+        rank = role_rank(nm.role)
+        inn_dt = parse_date(nm.inn)
+        ut_dt = parse_date(nm.ut)
+        inn_date = inn_dt.date() if inn_dt else None
+        ut_date = ut_dt.date() if ut_dt else None
+        committee_intervals[nid][mid].append((inn_date, ut_date))
+        current = best_roles[nid].get(mid)
+        new_key = (inn_date or dt.date.min, ut_date or dt.date.max, -rank)
+        curr_key = (current[3] or dt.date.min, current[4] or dt.date.max, -(current[0])) if current else (dt.date.min, dt.date.min, 0)
+        if current is None or new_key > curr_key or (new_key == curr_key and rank < current[0]):
+            best_roles[nid][mid] = (rank, nm.role or "", nm.name or member_name.get(mid, f"Þingmaður {mid}"), inn_date, ut_date)
+
+    latest_meeting_date: Dict[int, Optional[dt.date]] = {
+        nid: max([d.date() for d in dates], default=None) for nid, dates in meeting_dates_by_nefnd.items()
+    }
+
+    def interval_covers(member_id: int, nefnd_id: int, when: Optional[dt.date]) -> bool:
+        if when is None:
+            return True
+        intervals = committee_intervals.get(nefnd_id, {}).get(member_id, [])
+        if not intervals:
+            return True
+        for inn, ut in intervals:
+            if inn and when < inn:
+                continue
+            if ut and when > ut:
+                continue
+            return True
+        return False
+
+    # Seed members list and official set from best role (only if they cover latest meeting date)
+    for nid, members in best_roles.items():
+        for mid, (rank, role, name_val, _, _) in members.items():
+            if not interval_covers(mid, nid, latest_meeting_date.get(nid)):
+                continue
+            is_official = rank <= 3  # formaður, 1./2. varaformaður, nefndarmaður
+            if is_official:
+                official_members[nid].add(mid)
+            if mid not in seen_members_nefnd[nid]:
+                seen_members_nefnd[nid].add(mid)
+                members_by_nefnd[nid].append(type("NefndMemberProxy", (), {
+                    "member_id": mid,
+                    "name": name_val,
+                    "role": role,
+                }))
+
+    appearances_any: Dict[int, int] = defaultdict(int)
+    present_by_meeting: Dict[Tuple[int, dt.date], set] = defaultdict(set)
+
+    for nefnd_id, start_time, member_id, status in attendance_rows:
+        if nefnd_id is None or member_id is None:
+            continue
+        dt_val = _parse_dt(start_time)
+        if status in ("present", "proxy_present"):
+            appearances_any[int(member_id)] += 1
+            if dt_val:
+                present_by_meeting[(int(nefnd_id), dt_val.date())].add(int(member_id))
+
+    # Build official attendance (only formal members, not varamaður/áheyrnarfulltrúi)
+    for nid, mids in official_members.items():
+        dates = meeting_dates_by_nefnd.get(nid, [])
+        for mid in mids:
+            total = 0
+            attended = 0
+            for d in dates:
+                if not active_on(mid, nid, d.date()):
+                    continue
+                total += 1
+                if mid in present_by_meeting.get((nid, d.date()), set()):
+                    attended += 1
+            attendance_by_nm[(nid, mid)] = {
+                "attended": attended,
+                "total": total,
+                "appearances": appearances_any.get(mid, 0),
+            }
+            if mid not in seen_members_nefnd[nid]:
+                seen_members_nefnd[nid].add(mid)
+                members_by_nefnd[nid].append(type("NefndMemberProxy", (), {
+                    "member_id": mid,
+                    "name": member_name.get(mid, f"Þingmaður {mid}"),
+                    "role": None,
+                }))
+
+    # Order members within each committee by role priority then name
+    for nid, lst in members_by_nefnd.items():
+        lst.sort(key=lambda x: (role_rank(getattr(x, "role", None)), icelandic_sort_key(getattr(x, "name", ""))))
 
     mal_by_nefnd_name: Dict[str, set] = defaultdict(set)
     for v in votes:
@@ -833,13 +1280,13 @@ def committees():
                     "umsagn_url": f"https://www.althingi.is/thingstorf/thingmalin/erindi/{lthing}/{mk[0]}/?ltg={lthing}&mnr={mk[0]}",
                 })
 
-    for lst in members_by_nefnd.values():
-        lst.sort(key=lambda m: icelandic_sort_key(m.name or ""))
+    # Already sorted by role then name; do not resort by name only.
     for lst in issues_by_nefnd.values():
         lst.sort(key=lambda x: x["malnr"])
 
     return render_template("committees.html", committees=committees, current_lthing=lthing,
-                           members_by_nefnd=members_by_nefnd, issues_by_nefnd=issues_by_nefnd)
+                           members_by_nefnd=members_by_nefnd, issues_by_nefnd=issues_by_nefnd,
+                           attendance_by_nm=attendance_by_nm)
 
 
 def register(app):

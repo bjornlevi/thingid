@@ -382,6 +382,9 @@ def infer_resource(resource_name: str, resource_url: str, root: ET.Element, max_
     repeated_paths = sorted([p for p in leaf_repeat_max.keys()])
 
     natural_key = guess_natural_key(list(attr_values.keys()), list(leaf_profiles.keys()))
+    # Allow multiple málsflokkur per málsnúmer: do not unique by málsnúmer alone
+    if resource_name == "þingmálalisti":
+        natural_key = None
     # Allow multiple vote records per mál: avoid unique constraint for atkvæðagreiðslur
     if resource_name == "atkvæðagreiðslur":
         natural_key = None

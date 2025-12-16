@@ -120,6 +120,8 @@ class CommitteeAttendance(models.Base):
     status = models.Column(models.Text)  # present, proxy_present, notified_absent, absent
     role = models.Column(models.Text, nullable=True)
     substitute_for_member_id = models.Column(models.Integer, nullable=True)
+    arrival_time = models.Column(models.Text, nullable=True)
+    leave_note = models.Column(models.Text, nullable=True)
 
     __table_args__ = (
         models.UniqueConstraint("meeting_id", "member_id", name="uq_committee_attendance"),

@@ -39,6 +39,9 @@
                                     <span class="pill neutral">Mæting á nefndarfundi: {{ "%.1f"|format(m.committee_att_pct) }}%</span>
                                 {% endif %}
                             </div>
+                            <div>
+                                <a class="pill link" href="{{ url_for('main.member_attendance', member_id=m.attr_id) }}">Sjá mætingarskýrslu</a>
+                            </div>
                             <div class="links">
                                 {% if m.attr_id %}
                                     <a href="https://www.althingi.is/altext/cv/is/cv/{{ m.cv_slug }}/{{ m.attr_id }}/?nfaerslunr={{ m.attr_id }}">Þingstörf</a>
