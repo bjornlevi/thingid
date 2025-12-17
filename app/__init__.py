@@ -8,6 +8,7 @@ from flask import Flask
 from sqlalchemy import create_engine
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from .middleware import PrefixMiddleware
 
 def _load_env_file(path: Path, *, override: bool = False) -> None:
     """
@@ -57,18 +58,13 @@ def create_app() -> Flask:
         _load_env_file(root_dir / ".flaskenv", override=False)
         _load_env_file(root_dir / ".env", override=False)
 
-    url_prefix = _normalize_url_prefix(
-        os.environ.get("THINGID_PREFIX") or os.environ.get("APP_URL_PREFIX")
-    )
+    url_prefix = _normalize_url_prefix(os.environ.get("THINGID_PREFIX") or os.environ.get("APP_URL_PREFIX"))
 
-    # If we explicitly configure a URL prefix, serve static under that prefix.
-    # Otherwise (prefix stripped by reverse proxy), keep default `/static` and rely on
-    # ProxyFix + `X-Forwarded-Prefix` for correct URL generation.
-    static_url_path = f"{url_prefix}/static" if url_prefix else None
-    app = Flask(__name__, static_url_path=static_url_path)
+    # Keep Flask mounted at `/`. If the app is deployed under a prefix, we rely on:
+    # - PrefixMiddleware (when the proxy preserves the prefix upstream), or
+    # - ProxyFix + X-Forwarded-Prefix (when the proxy strips the prefix upstream).
+    app = Flask(__name__)
     app.config["URL_PREFIX"] = url_prefix
-    if url_prefix:
-        app.config["APPLICATION_ROOT"] = url_prefix
 
     # Secret key (prefer standard Flask var, but allow project-specific name)
     app.secret_key = (
@@ -90,7 +86,8 @@ def create_app() -> Flask:
     # Respect reverse-proxy headers. In particular, `X-Forwarded-Prefix` lets us
     # generate correct URLs when the proxy strips the mount prefix upstream.
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+    app.wsgi_app = PrefixMiddleware(app.wsgi_app, url_prefix)
 
     from . import views  # noqa: WPS433
-    views.register(app, url_prefix=url_prefix)
+    views.register(app)
     return app
