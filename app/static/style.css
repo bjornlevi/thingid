@@ -108,7 +108,6 @@ details[open] summary { color: var(--accent); }
 .filter-pill {
     cursor: pointer;
     color: inherit;
-    border: none;
 }
 .filter-pill.disabled {
     opacity: 0.45;

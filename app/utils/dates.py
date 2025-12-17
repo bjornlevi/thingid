@@ -7,6 +7,7 @@ _DATE_FORMATS = (
     "%Y-%m-%d",
     "%Y-%m-%d %H:%M",
     "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S",
     "%Y-%m-%dT%H:%M:%S%z",
     "%d.%m.%Y",
 )
@@ -21,7 +22,11 @@ def parse_date(val: Optional[str]) -> Optional[dt.datetime]:
             return dt.datetime.strptime(val, fmt)
         except Exception:
             continue
-    return None
+    try:
+        cleaned = val.replace("Z", "+00:00")
+        return dt.datetime.fromisoformat(cleaned)
+    except Exception:
+        return None
 
 
 def business_days_between(start: dt.date, end: dt.date) -> int:

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import datetime as dt
 import re
@@ -31,6 +31,7 @@ from .utils.dates import (
     prefer_athugasemd_date,
 )
 from .manual_models import IssueDocument, VoteDetail, MemberSeat, NefndMember, attach_flutningsmenn
+from .constants import WRITTEN_QUESTION_LABEL, canonical_issue_type
 
 bp = Blueprint("main", __name__)
 
@@ -380,6 +381,7 @@ def _parse_attendance_from_html(html_text: str, abbr_to_member: Dict[str, int]) 
 @bp.route("/")
 def index():
     engine = _get_engine()
+    metrics_by_mal: Dict[int, Any] = {}
     with Session(engine) as session:
         issues = session.execute(
             select(models.ThingmalalistiMal).order_by(models.ThingmalalistiMal.attr_malsnumer)
@@ -432,6 +434,17 @@ def index():
         first_answer_date: Dict[int, dt.datetime] = {}
         # Pre-fetched issue documents are stored in IssueDocument; join to flutningsmenn via skjalnr
         issue_docs = session.execute(select(IssueDocument)).scalars().all()
+        if manual_models and hasattr(manual_models, "IssueMetrics"):
+            try:
+                lthing_val = current_lthing(session)
+                if lthing_val is not None:
+                    for m in session.execute(
+                        select(manual_models.IssueMetrics).where(manual_models.IssueMetrics.lthing == lthing_val)
+                    ).scalars().all():
+                        if m.malnr is not None:
+                            metrics_by_mal[int(m.malnr)] = m
+            except Exception:
+                metrics_by_mal = {}
         for d in issue_docs:
             stored = docs_by_nr.get(d.skjalnr or -1)
             docs_by_mal[d.malnr or -1].append(type("DocProxy", (), {
@@ -501,43 +514,44 @@ def index():
         key = issue.attr_malsnumer
         if key is None:
             continue
-        typ = (issue.leaf_malstegund_heiti2 or issue.leaf_malstegund_heiti or "").strip()
+        typ = canonical_issue_type(issue.leaf_malstegund_heiti2 or issue.leaf_malstegund_heiti)
         typ_lower = typ.lower()
-        # answer latency (weekdays approx = diff * 5/7) only for skriflegar fyrirspurnir
-        latency_days = None
-        is_written_question = (
-            getattr(issue, "attr_malsflokkur", None) == "A"
-            and (issue.leaf_malstegund_heiti2 or "").strip().casefold() == "fyrirspurn til skrifl. svars"
-        )
-        if is_written_question:
-            # start with earliest doc date we captured (question doc)
-            start_dt = first_doc_date.get(int(key))
-            docs_for_issue = docs_by_mal.get(int(key), [])
-            question_dt: Optional[dt.date] = None
+        m = metrics_by_mal.get(int(key))
+        if m is not None and getattr(m, "answer_latency", None) is not None:
+            issue._answer_latency = int(m.answer_latency)
+            if getattr(m, "answer_status", None):
+                answered_by_issue[int(key)] = str(m.answer_status)
+        else:
+            latency_days = None
+            is_written_question = (
+                getattr(issue, "attr_malsflokkur", None) == "A"
+                and canonical_issue_type(issue.leaf_malstegund_heiti2).casefold() == WRITTEN_QUESTION_LABEL.casefold()
+            )
             answer_dt: Optional[dt.date] = None
-            for doc in docs_for_issue:
-                stype = (getattr(doc, "leaf_skjalategund", "") or "").lower()
-                utb = parse_date(getattr(doc, "leaf_utbyting", None))
-                is_question_doc = ("fsp" in stype) or ("fyrirspurn" in stype)
-                is_answer_doc = ("svar" in stype) and not is_question_doc
-                # question document
-                if is_question_doc:
-                    if utb and (question_dt is None or utb.date() < question_dt):
-                        question_dt = utb.date()
-                # answer document
-                if is_answer_doc:
-                    # prefer date embedded in athugasemd if available
-                    attn = getattr(doc, "leaf_athugasemd", None) or ""
-                    cand_dt = prefer_athugasemd_date(attn) or utb
-                    if cand_dt and (answer_dt is None or cand_dt.date() < answer_dt):
-                        answer_dt = cand_dt.date()
-            # prefer parsed question_dt from docs; otherwise fall back to first_doc_date map
-            if question_dt is None and start_dt:
-                question_dt = start_dt.date()
-            if question_dt:
-                end_date = answer_dt or dt.date.today()
-                latency_days = business_days_between(question_dt, end_date)
-        issue._answer_latency = latency_days
+            if is_written_question:
+                start_dt = first_doc_date.get(int(key))
+                docs_for_issue = docs_by_mal.get(int(key), [])
+                question_dt: Optional[dt.date] = None
+                for doc in docs_for_issue:
+                    stype = (getattr(doc, "leaf_skjalategund", "") or "").lower()
+                    utb = parse_date(getattr(doc, "leaf_utbyting", None))
+                    is_question_doc = ("fsp" in stype) or ("fyrirspurn" in stype)
+                    is_answer_doc = ("svar" in stype) and not is_question_doc
+                    if is_question_doc and utb:
+                        if question_dt is None or utb.date() < question_dt:
+                            question_dt = utb.date()
+                    if is_answer_doc:
+                        attn = getattr(doc, "leaf_athugasemd", None) or ""
+                        cand_dt = prefer_athugasemd_date(attn) or utb
+                        if cand_dt and (answer_dt is None or cand_dt.date() < answer_dt):
+                            answer_dt = cand_dt.date()
+                if question_dt is None and start_dt:
+                    question_dt = start_dt.date()
+                if question_dt:
+                    end_date = answer_dt or dt.date.today()
+                    latency_days = business_days_between(question_dt, end_date)
+                answered_by_issue[int(key)] = "svarað" if answer_dt else "ósvarað"
+            issue._answer_latency = latency_days
         speeches_by_mal[int(key)] = _cached_speeches(
             getattr(issue, "leaf_xml", None),
             cache_dir,
@@ -556,9 +570,7 @@ def index():
         # store type for counting
         if typ:
             type_by_issue[int(key)] = typ
-        # store answered/unanswered for written questions
-        if is_written_question:
-            answered_by_issue[int(key)] = "svarað" if answer_dt else "ósvarað"
+        # answered_by_issue is set above (metrics or fallback)
 
     # aggregate counts
     party_counts: Dict[str, int] = defaultdict(int)
@@ -588,6 +600,7 @@ def index():
         issue_types=type_by_issue,
         issue_answer_status=answered_by_issue,
         answer_counts=answer_counts,
+        written_question_label=WRITTEN_QUESTION_LABEL,
     )
 
 
@@ -984,6 +997,59 @@ def member_attendance(member_id: int):
     nefnd_name_map = {int(n.attr_id): (n.leaf_heiti or f"Nefnd {n.attr_id}") for n in nefndir if n.attr_id is not None}
     abbr_map = {_norm_abbr(p.leaf_skammstofun): int(p.attr_id) for p in people if p.attr_id is not None and p.leaf_skammstofun}
 
+    def _plain_text_from_fundargerd(texti: str) -> str:
+        txt = re.sub(r"<br\\s*/?>", "\n", texti, flags=re.IGNORECASE)
+        txt = re.sub(r"<[^>]+>", "", txt)
+        txt = txt.replace("&nbsp;", " ")
+        return txt
+
+    def _extract_absence_reason(mt: Any) -> Optional[str]:
+        try:
+            root = ET.fromstring(mt.raw_xml)
+        except Exception:
+            return None
+        texti = ""
+        for t in root.iter():
+            if _strip_tag(t.tag) == "texti":
+                candidate = t.text or ""
+                if len(candidate) > len(texti):
+                    texti = candidate
+        if not texti:
+            return None
+
+        plain = _plain_text_from_fundargerd(texti)
+        member_name = (member.leaf_nafn or "").strip()
+        if not member_name:
+            return None
+        member_name_ascii = unicodedata.normalize("NFKD", member_name.casefold())
+        member_name_ascii = "".join(ch for ch in member_name_ascii if not unicodedata.combining(ch))
+
+        def _as_ascii(s: str) -> str:
+            s2 = unicodedata.normalize("NFKD", s.casefold())
+            return "".join(ch for ch in s2 if not unicodedata.combining(ch))
+
+        # Often multiple members are listed on a single line with multiple sentences.
+        # Split into clauses and only use the clause containing this member name.
+        for raw_line in plain.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            for clause in re.split(r"[.;]\s+", line):
+                clause = clause.strip()
+                if not clause:
+                    continue
+                ascii_clause = _as_ascii(clause)
+                if member_name_ascii not in ascii_clause:
+                    continue
+                # Return a concise label for the UI.
+                if "forfoll" in ascii_clause:  # forföll/forfoll
+                    return "forföll"
+                if "fjarverandi" in ascii_clause:
+                    return "fjarverandi"
+                if "fjarvist" in ascii_clause:
+                    return "fjarvist"
+        return None
+
     def _extract_member_timings(mt: Any) -> Tuple[Optional[dt.datetime], Optional[str]]:
         try:
             root = ET.fromstring(mt.raw_xml)
@@ -1093,6 +1159,7 @@ def member_attendance(member_id: int):
         status = "attended" if mt.id in present_map else "missed"
         arrival_dt = None
         leave_note = None
+        absence_reason = None
         if mt.id in arrival_map and arrival_map[mt.id]:
             try:
                 t = dt.datetime.strptime(arrival_map[mt.id], "%H:%M").time()
@@ -1101,6 +1168,8 @@ def member_attendance(member_id: int):
                 arrival_dt = None
         if arrival_dt is None:
             arrival_dt, leave_note = _extract_member_timings(mt)
+        if status == "missed":
+            absence_reason = _extract_absence_reason(mt)
         meeting_start = _parse_iso(mt.start_time) or parse_date(mt.start_time)
         if status == "attended" and arrival_dt is None and meeting_start:
             arrival_dt = meeting_start  # fallback to start time if not parsed
@@ -1117,6 +1186,7 @@ def member_attendance(member_id: int):
             "fundargerd": _fundargerd_link(mt.raw_xml),
             "arrival": arrival_dt,
             "leave_note": leave_note,
+            "absence_reason": absence_reason,
             "is_late": is_late,
         })
 

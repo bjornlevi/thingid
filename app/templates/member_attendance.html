@@ -39,6 +39,8 @@
             Mæting:
             {% if rec.arrival %}
               <span style="color: {{ '#f97316' if rec.is_late else '#9ca3af' }};">{{ rec.arrival.strftime("%H:%M") }}</span>
+            {% elif rec.absence_reason %}
+              <span style="color: #f87171;">{{ rec.absence_reason }}</span>
             {% else %}
               —
             {% endif %}

@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import importlib
 import json
 import os
@@ -43,7 +44,6 @@ from sqlalchemy.orm import Session
 
 from app.constants import WRITTEN_QUESTION_LABEL, ANSWER_STATUS_SVARAD, ANSWER_STATUS_OSVARAD
 from app.utils.dates import parse_date, business_days_between, prefer_athugasemd_date
-from app.manual_models import IssueMetrics
 
 def _norm_tag(tag: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9]+", "", tag or "")
@@ -59,24 +59,18 @@ BASE_CURRENT = "https://www.althingi.is/altext/xml/loggjafarthing/yfirstandandi/
 def now_utc_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
-def parse_date_str(val: Optional[str]) -> Optional[datetime]:
-    if not val:
-        return None
-    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%d.%m.%Y"):
-        try:
-            return datetime.strptime(val, fmt)
-        except Exception:
-            continue
+def _filter_model_kwargs(Model: Any, row: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    SQLAlchemy model constructors reject unknown keyword arguments.
+    Be defensive and drop unexpected keys (e.g. raw XML tag names) to avoid hard crashes.
+    """
     try:
-        return datetime.fromisoformat(val)
+        valid = {c.key for c in Model.__mapper__.column_attrs}
     except Exception:
-        return None
-
-def _parse_iso(val: Optional[str]) -> Optional[datetime]:
-    try:
-        return datetime.fromisoformat(val) if val else None
-    except Exception:
-        return None
+        valid = set()
+    if not valid:
+        return row
+    return {k: v for k, v in row.items() if k in valid}
 
 class Fetcher:
     def __init__(self, timeout: int = 30, sleep_s: float = 0.15, cache_dir: Optional[str] = None, max_age_hours: float = 23, force: bool = False):
@@ -456,7 +450,15 @@ def populate_committee_attendance(session: Session, cache_dir: Path, lthing: int
     session.execute(text('DELETE FROM committee_meeting WHERE lthing=:lt'), {"lt": lthing})
     session.flush()
 
+    matched = 0
+    meetings_added = 0
+    attendance_added = 0
+    skipped_no_texti = 0
+    skipped_no_attendance = 0
+    parse_errors: List[Tuple[str, str]] = []
+
     for fp in cache_dir.glob("*nefndarfundur*"):
+        matched += 1
         try:
             root = ET.parse(fp).getroot()
             attrs = root.attrib
@@ -478,11 +480,11 @@ def populate_committee_attendance(session: Session, cache_dir: Path, lthing: int
             for t in root.iter():
                 tag = strip_ns(t.tag)
                 if tag == "dagurtími" or tag == "dagurtimi":
-                    meeting_dt = parse_date_str(t.text) or _parse_iso(t.text)
+                    meeting_dt = parse_date(t.text)
                 elif tag == "fundursettur":
-                    meeting_dt = meeting_dt or _parse_iso(t.text)
+                    meeting_dt = meeting_dt or parse_date(t.text)
                 elif tag == "fuslit":
-                    meeting_end = _parse_iso(t.text)
+                    meeting_end = parse_date(t.text)
             texti = ""
             for t in root.iter():
                 if strip_ns(t.tag) == "texti":
@@ -491,10 +493,12 @@ def populate_committee_attendance(session: Session, cache_dir: Path, lthing: int
                         texti = candidate
             # store meeting only if fundargerð text is present; otherwise skip counting
             if not texti:
+                skipped_no_texti += 1
                 continue
             attendance, seen_ids = parse_attendance_from_html(texti, abbr_to_id)
             if not attendance:
                 # no fundargerð attendance -> skip counting this meeting
+                skipped_no_attendance += 1
                 continue
             arrival_map = parse_arrival_times(texti, abbr_to_id)
             mt = CommitteeMeeting(
@@ -508,6 +512,7 @@ def populate_committee_attendance(session: Session, cache_dir: Path, lthing: int
             session.add(mt)
             session.flush()
             meeting_id = mt.id
+            meetings_added += 1
             for rec in attendance:
                 mid = rec.get("member_id")
                 if not mid:
@@ -524,18 +529,37 @@ def populate_committee_attendance(session: Session, cache_dir: Path, lthing: int
                     substitute_for_member_id=substitute_for,
                     arrival_time=arrival_val,
                 ))
+                attendance_added += 1
                 if status == "present" or status == "proxy_present":
                     counts[mid]["attended"] += 1
                     counts[mid]["total"] += 1
                 elif status == "absent_notified":
                     counts[mid]["total"] += 1
             session.commit()
-        except Exception:
+        except Exception as e:
+            if len(parse_errors) < 5:
+                parse_errors.append((str(fp), str(e)))
             continue
+
+    if parse_errors:
+        for fp, msg in parse_errors:
+            print(f"[warn] committee_attendance parse failed for {fp}: {msg}")
+    print(
+        "[ok] committee_attendance:"
+        f" matched {matched} cached fundargerðir,"
+        f" stored {meetings_added} meetings and {attendance_added} attendance rows"
+        f" (skipped: no_texti={skipped_no_texti}, no_attendance={skipped_no_attendance})"
+    )
     return counts
 
 
-def compute_issue_metrics(session: Session, lthing: int, issue_docs: List[Any], issues: List[Any]) -> List[Any]:
+def compute_issue_metrics(
+    lthing: int,
+    issue_docs: List[Any],
+    issues: List[Any],
+    athugasemd_by_skjalsnr: Dict[int, str],
+    manual_models: Any,
+) -> List[Any]:
     """Compute answer status/latency for written questions."""
     if not manual_models or not hasattr(manual_models, "IssueMetrics"):
         return []
@@ -572,7 +596,7 @@ def compute_issue_metrics(session: Session, lthing: int, issue_docs: List[Any], 
                 if question_dt is None or utb.date() < question_dt:
                     question_dt = utb.date()
             if is_answer:
-                attn_dt = prefer_athugasemd_date(getattr(doc, "athugasemd", None))
+                attn_dt = prefer_athugasemd_date(athugasemd_by_skjalsnr.get(int(doc.skjalnr or -1)))
                 cand = attn_dt or utb
                 if cand:
                     if answer_dt is None or cand.date() < answer_dt:
@@ -990,7 +1014,7 @@ def main() -> int:
                     skipped_dupes += 1
                     continue
 
-                parent = Model(**row)
+                parent = Model(**_filter_model_kwargs(Model, row))
                 parents.append(parent)
                 session.add(parent)
 
@@ -1206,6 +1230,32 @@ def main() -> int:
             for p in people:
                 if p.attr_id is not None and p.leaf_skammstofun:
                     abbr_map[_norm_tag(p.leaf_skammstofun)] = int(p.attr_id)
+            # derived issue metrics (answer status/latency) for written questions
+            if hasattr(manual_models, "IssueMetrics") and hasattr(manual_models, "IssueDocument"):
+                try:
+                    session.execute(text("DELETE FROM issue_metrics WHERE lthing=:lt"), {"lt": lthing})
+                    issue_rows = session.execute(select(models.ThingmalalistiMal)).scalars().all()
+                    issue_docs = session.execute(
+                        select(manual_models.IssueDocument).where(manual_models.IssueDocument.lthing == lthing)
+                    ).scalars().all()
+                    ath_map: Dict[int, str] = {}
+                    for nr, ath in session.execute(
+                        select(models.ThingskjalalistiThingskjal.attr_skjalsnumer, models.ThingskjalalistiThingskjal.leaf_athugasemd)
+                    ).all():
+                        if nr is None or not ath:
+                            continue
+                        try:
+                            ath_map[int(nr)] = ath
+                        except Exception:
+                            continue
+                    metrics = compute_issue_metrics(lthing, issue_docs, issue_rows, ath_map, manual_models)
+                    if metrics:
+                        session.add_all(metrics)
+                    session.commit()
+                    print(f"[ok] issue_metrics: stored {len(metrics)} rows")
+                except Exception as e:
+                    session.rollback()
+                    print(f"[warn] issue_metrics failed: {e}")
             # vote sessions
             populate_vote_sessions_and_attendance(session, lthing, manual_models)
             # committee attendance

@@ -23,7 +23,7 @@
 </div>
 {% endif %}
 <div class="pill-row filter-row" data-filter="answer">
-    {% set written_label = "fyrirspurn til skrifl. svars" %}
+    {% set written_label = written_question_label %}
     <button class="pill subtle filter-pill" data-value="{{ written_label }}" data-kind="type">{{ written_label }} ({{ type_counts.get(written_label, 0) if type_counts else 0 }})</button>
     {% if answer_counts %}
         {% for name, cnt in answer_counts.items() %}
