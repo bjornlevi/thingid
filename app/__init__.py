@@ -6,6 +6,7 @@ from typing import Optional
 
 from flask import Flask
 from sqlalchemy import create_engine
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 def _load_env_file(path: Path, *, override: bool = False) -> None:
@@ -60,6 +61,9 @@ def create_app() -> Flask:
         os.environ.get("THINGID_PREFIX") or os.environ.get("APP_URL_PREFIX")
     )
 
+    # If we explicitly configure a URL prefix, serve static under that prefix.
+    # Otherwise (prefix stripped by reverse proxy), keep default `/static` and rely on
+    # ProxyFix + `X-Forwarded-Prefix` for correct URL generation.
     static_url_path = f"{url_prefix}/static" if url_prefix else None
     app = Flask(__name__, static_url_path=static_url_path)
     app.config["URL_PREFIX"] = url_prefix
@@ -82,6 +86,10 @@ def create_app() -> Flask:
     db_url = db_url or os.environ.get("DATABASE_URL") or "sqlite:///data/althingi.db"
     engine = create_engine(db_url, future=True)
     app.config["ENGINE"] = engine
+
+    # Respect reverse-proxy headers. In particular, `X-Forwarded-Prefix` lets us
+    # generate correct URLs when the proxy strips the mount prefix upstream.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
     from . import views  # noqa: WPS433
     views.register(app, url_prefix=url_prefix)
