@@ -5,6 +5,7 @@ DB ?= data/althingi.db
 SCHEMA ?= schema_map.json
 FLASK_APP ?= wsgi.py
 FLASK_ENV ?= development
+APP_URL_PREFIX ?=
 
 .PHONY: check_data get_data web
 
@@ -16,4 +17,4 @@ get_data:
 	$(PYTHON) scripts/get_data.py --db $(DB) --schema $(SCHEMA) --models-dir $(MODELS_DIR)
 
 web:
-	FLASK_APP=$(FLASK_APP) FLASK_ENV=$(FLASK_ENV) $(PYTHON) -m flask run
+	FLASK_APP=$(FLASK_APP) FLASK_ENV=$(FLASK_ENV) APP_URL_PREFIX="$(APP_URL_PREFIX)" $(PYTHON) -m flask run

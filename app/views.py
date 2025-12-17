@@ -1444,8 +1444,8 @@ def committees():
                            attendance_by_nm=attendance_by_nm)
 
 
-def register(app):
-    app.register_blueprint(bp)
+def register(app, url_prefix: str = ""):
+    app.register_blueprint(bp, url_prefix=url_prefix or None)
 
 
 @bp.route("/agenda")
