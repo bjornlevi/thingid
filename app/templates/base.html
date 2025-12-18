@@ -4,6 +4,15 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Alþingi Overview</title>
+    {% set share_image = url_for('static', filename='share_org.png', _external=True) %}
+    <meta name="description" content="Dagleg yfirsýn yfir þingmál, þingmenn, nefndir og dagskrá Alþingis.">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Hvað er í gangi á þingi?">
+    <meta property="og:description" content="Dagleg yfirsýn yfir þingmál, þingmenn, nefndir og dagskrá Alþingis.">
+    <meta property="og:image" content="{{ share_image }}">
+    <meta property="og:image:alt" content="Yfirlit yfir Alþingi: mál, nefndir og þingmenn.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="{{ share_image }}">
     <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
