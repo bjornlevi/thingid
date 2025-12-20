@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">Atkvæðagreiðslur</p>
+    <h1>Yfirlit fyrir þingmenn</h1>
+    <p class="lede">Sýnir hvaða atkvæðagreiðslur þingmaður átti að sækja (inn/út þingseta) og hvernig var greitt atkvæði.</p>
+  </div>
+</section>
+
+<section class="stack">
+  {% if report %}
+    <ul class="list">
+      {% for row in report %}
+        <li class="panel" id="{{ row.member.attr_id }}">
+          <div class="panel-head">
+            <div>
+              <h3>{{ row.member.leaf_nafn }}</h3>
+              {% if row.member.leaf_skammstofun %}<span class="pill neutral">{{ row.member.leaf_skammstofun }}</span>{% endif %}
+            </div>
+            <div class="text-right">
+              {% if row.pct is not none %}
+                <div class="pill neutral">{{ "%.1f"|format(row.pct) }}%</div>
+              {% endif %}
+              <div class="muted">Alls: {{ row.total }} · Mætti: {{ row.attended }} · Boðaði fjarvist: {{ row.notified }} · Fjarverandi: {{ row.absent }}</div>
+            </div>
+          </div>
+          <div class="panel-body">
+            <details>
+              <summary>Atkvæðagreiðslur ({{ row.expected|length }})</summary>
+              <ul class="list">
+                {% for item in row.expected %}
+                  <li>
+                    <div class="row">
+                      <strong>#{{ item.vote_num }}</strong>
+                      {% if item.time %}<span class="muted">{{ item.time.strftime("%Y-%m-%d %H:%M") }}</span>{% endif %}
+                      <span class="pill {% if item.status in ['já','nei','greiðir ekki atkvæði'] %}subtle{% else %}neutral{% endif %}">{{ item.status }}</span>
+                    </div>
+                  </li>
+                {% endfor %}
+              </ul>
+            </details>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">Engin gögn fundust.</p>
+  {% endif %}
+</section>
+{% endblock %}

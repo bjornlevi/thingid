@@ -122,6 +122,28 @@ details[open] summary { color: var(--accent); }
 }
 .filter-pill:hover { border-color: var(--accent); }
 
+/* Member attendance tabs */
+.tab-btn {
+    padding: 0.5rem 1rem;
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background: rgba(255,255,255,0.08);
+    color: #fff;
+    font-weight: 700;
+    cursor: pointer;
+    font-size: 1rem;
+}
+.tab-btn.active {
+    border-color: var(--accent);
+    color: #fff;
+    box-shadow: 0 0 12px rgba(79, 209, 197, 0.35);
+}
+
+.vote-list .row .title-link,
+.vote-list .row strong {
+    font-size: 1rem;
+    color: #fff;
+}
 .row {
     display: flex;
     justify-content: space-between;
@@ -130,11 +152,18 @@ details[open] summary { color: var(--accent); }
     flex-wrap: wrap;
 }
 .vote-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto auto;
     align-items: center;
     gap: 0.6rem;
-    flex-wrap: wrap;
 }
+.vote-row .vote-date {
+    text-align: right;
+    min-width: 120px;
+}
+
+.pill.danger { background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.4); color: #fca5a5; }
+.pill.warn { background: rgba(234, 179, 8, 0.15); border-color: rgba(234, 179, 8, 0.4); color: #facc15; }
 .vote-card {
     border-radius: 12px;
     padding: 0.5rem 0.75rem;

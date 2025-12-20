@@ -4,7 +4,7 @@
   <div>
     <p class="eyebrow">Mæting</p>
     <h1>{{ member.leaf_nafn }}</h1>
-    <p class="lede">Sundurliðun á nefndarfundum fyrir {{ current_lthing }}. löggjafarþing.</p>
+    <p class="lede">Sundurliðun á mætingu fyrir {{ current_lthing }}. löggjafarþing.</p>
   </div>
   <div class="hero-meta">
     {% if pct is not none %}
@@ -15,45 +15,116 @@
 </section>
 
 <section class="stack">
-  {% if records %}
-  <ul class="list">
-    {% for rec in records %}
-      <li class="panel">
+  <div class="tab-buttons" style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem;">
+    <button class="tab-btn active" data-tab="committees">Nefndir</button>
+    <button class="tab-btn" data-tab="votes">Atkvæðagreiðslur</button>
+  </div>
+
+  <div class="tab-panel" id="tab-committees" style="display:block;">
+    {% if records %}
+    <ul class="list">
+      {% for rec in records %}
+        <li class="panel">
+          <div class="panel-head">
+            <div>
+              <h3>{{ rec.nefnd_name or ("Nefnd " ~ rec.nefnd_id) }} - fundur {{ rec.meeting_num }}
+                {% if rec.fundargerd %}
+                  <a class="pill link" href="{{ rec.fundargerd }}" target="_blank" rel="noreferrer">Fundargerð</a>
+                {% endif %}
+              </h3>
+            </div>
+            <div class="text-right">
+              <div class="muted">{{ rec.time.strftime("%Y-%m-%d %H:%M") }}</div>
+              <div style="color: {{ '#f97316' if rec.is_late else ('#4ade80' if rec.status == 'attended' else '#f87171') }};">
+                Staða: {{ "Seint" if rec.is_late else ("Mætti" if rec.status == "attended" else "Mætti ekki") }}
+              </div>
+            </div>
+          </div>
+          <div class="panel-body">
+            <p class="muted">
+              Mæting:
+              {% if rec.arrival %}
+                <span style="color: {{ '#f97316' if rec.is_late else '#9ca3af' }};">{{ rec.arrival.strftime("%H:%M") }}</span>
+              {% elif rec.absence_reason %}
+                <span style="color: #f87171;">{{ rec.absence_reason }}</span>
+              {% else %}
+                —
+              {% endif %}
+            </p>
+            {% if rec.leave_note %}
+              <p class="muted">{{ rec.leave_note }}</p>
+            {% endif %}
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+      <p class="muted">Engin fundargögn fundust fyrir þennan þingmann.</p>
+    {% endif %}
+  </div>
+
+  <div class="tab-panel" id="tab-votes" style="display:none;">
+    {% if vote_expected %}
+      <div class="panel">
         <div class="panel-head">
           <div>
-            <h3>{{ rec.nefnd_name or ("Nefnd " ~ rec.nefnd_id) }} - fundur {{ rec.meeting_num }}
-              {% if rec.fundargerd %}
-                <a class="pill link" href="{{ rec.fundargerd }}" target="_blank" rel="noreferrer">Fundargerð</a>
-              {% endif %}
-            </h3>
+            <h3>Atkvæðagreiðslur</h3>
           </div>
           <div class="text-right">
-            <div class="muted">{{ rec.time.strftime("%Y-%m-%d %H:%M") }}</div>
-            <div style="color: {{ '#f97316' if rec.is_late else ('#4ade80' if rec.status == 'attended' else '#f87171') }};">
-              Staða: {{ "Seint" if rec.is_late else ("Mætti" if rec.status == "attended" else "Mætti ekki") }}
-            </div>
+            {% if vote_pct is not none %}
+              <div class="pill neutral">{{ "%.1f"|format(vote_pct) }}%</div>
+            {% endif %}
+            <div class="muted">Alls: {{ vote_total }} · Mætti: {{ vote_attended }} · Boðaði fjarvist: {{ vote_notified }} · Fjarverandi: {{ vote_absent }}</div>
           </div>
         </div>
         <div class="panel-body">
-          <p class="muted">
-            Mæting:
-            {% if rec.arrival %}
-              <span style="color: {{ '#f97316' if rec.is_late else '#9ca3af' }};">{{ rec.arrival.strftime("%H:%M") }}</span>
-            {% elif rec.absence_reason %}
-              <span style="color: #f87171;">{{ rec.absence_reason }}</span>
-            {% else %}
-              —
-            {% endif %}
-          </p>
-          {% if rec.leave_note %}
-            <p class="muted">{{ rec.leave_note }}</p>
-          {% endif %}
+          <ul class="list vote-list">
+            {% for v in vote_expected %}
+              <li>
+                <div class="row vote-row" style="align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                  {% set label = v.title or ('Þingmál #' ~ v.vote_num) %}
+                  {% if v.link %}
+                    <a class="title-link" href="{{ v.link }}" target="_blank" rel="noreferrer">{{ label }} — #{{ v.vote_num }}</a>
+                  {% else %}
+                    <strong>{{ label }} — #{{ v.vote_num }}</strong>
+                  {% endif %}
+                  {% set pill_class = 'subtle' %}
+                  {% if v.status == 'nei' %}
+                    {% set pill_class = 'danger' %}
+                  {% elif v.status == 'greiðir ekki atkvæði' %}
+                    {% set pill_class = 'warn' %}
+                  {% endif %}
+                  <span class="pill {{ pill_class }}">{{ v.status }}</span>
+                  <span class="vote-date muted">{% if v.time %}{{ v.time.strftime("%Y-%m-%d %H:%M") }}{% endif %}</span>
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
         </div>
-      </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-    <p class="muted">Engin fundargögn fundust fyrir þennan þingmann.</p>
-  {% endif %}
+      </div>
+    {% else %}
+      <p class="muted">Engar skráðar atkvæðagreiðslur fyrir þetta tímabil.</p>
+    {% endif %}
+  </div>
 </section>
+
+<script>
+  (() => {
+    const buttons = document.querySelectorAll('.tab-btn');
+    const panels = {
+      committees: document.getElementById('tab-committees'),
+      votes: document.getElementById('tab-votes'),
+    };
+    buttons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        buttons.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const tab = btn.dataset.tab;
+        Object.keys(panels).forEach(key => {
+          panels[key].style.display = key === tab ? 'block' : 'none';
+        });
+      });
+    });
+  })();
+</script>
 {% endblock %}

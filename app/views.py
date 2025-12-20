@@ -958,6 +958,30 @@ def member_attendance(member_id: int):
         people = session.execute(
             select(models.ThingmannalistiThingmadur)
         ).scalars().all()
+        vote_sessions = []
+        if manual_models and hasattr(manual_models, "VoteSession"):
+            vote_sessions = session.execute(
+                select(manual_models.VoteSession.vote_num, manual_models.VoteSession.time)
+                .where(manual_models.VoteSession.lthing == lthing)
+            ).all()
+        if not vote_sessions:
+            vote_sessions = session.execute(
+                select(
+                    models.AtkvaedagreidslurAtkvaedagreidsla.attr_atkvaedagreidslunumer,
+                    models.AtkvaedagreidslurAtkvaedagreidsla.leaf_timi,
+                )
+            ).all()
+        all_vote_details = session.execute(
+            select(VoteDetail.vote_num, VoteDetail.voter_id, VoteDetail.vote)
+        ).all() if manual_models else []
+        votes_full = session.execute(
+            select(models.AtkvaedagreidslurAtkvaedagreidsla).where(
+                models.AtkvaedagreidslurAtkvaedagreidsla.attr_thingnumer == lthing
+            )
+        ).scalars().all()
+        votes_full = session.execute(
+            select(models.AtkvaedagreidslurAtkvaedagreidsla)
+        ).scalars().all()
 
     if member is None:
         return "Member not found", 404
@@ -1193,14 +1217,223 @@ def member_attendance(member_id: int):
     records.sort(key=lambda r: r["time"])
     pct = (attended / total * 100) if total else None
 
+    # --- Vote expectations for this member ---
+    vote_map: Dict[int, str] = {
+        int(vn): vote
+        for vn, mid, vote in all_vote_details
+        if mid is not None and int(mid) == member_id and vn is not None
+    }
+
+    vote_meta: Dict[int, Dict[str, Any]] = {}
+    for v in votes_full:
+        try:
+            num = int(v.attr_atkvaedagreidslunumer)
+        except Exception:
+            continue
+        title = getattr(v, "leaf_mal_malsheiti", None)
+        link = (
+            getattr(v, "leaf_nanar_html", None)
+            or getattr(v, "leaf_mal_html", None)
+            or getattr(v, "leaf_nanar_xml", None)
+            or getattr(v, "leaf_mal_xml", None)
+            or getattr(v, "leaf_thingskjal_slod_xml", None)
+        )
+        vote_meta[num] = {"title": title, "link": link}
+
+    sessions: List[Dict[str, Any]] = []
+    for vn, t in vote_sessions:
+        if vn is None:
+            continue
+        ts = (parse_date(t) or _parse_iso(t)) if t else None
+        meta = vote_meta.get(int(vn), {})
+        sessions.append({
+            "vote_num": int(vn),
+            "time": ts,
+            "title": meta.get("title"),
+            "link": meta.get("link"),
+        })
+    sessions.sort(key=lambda s: s["vote_num"])
+
+    vote_expected: List[Dict[str, Any]] = []
+    v_attended = v_notified = v_absent = 0
+    for vs in sessions:
+        ts = vs["time"]
+        include = False
+        if member_intervals:
+            include = _in_intervals(ts, member_intervals) if ts else True
+        else:
+            include = True
+        if not include:
+            continue
+        vote = vote_map.get(vs["vote_num"])
+        status = vote or "fjarverandi"
+        if vote in ("já", "nei", "greiðir ekki atkvæði"):
+            v_attended += 1
+        elif vote == "boðaði fjarvist":
+            v_notified += 1
+        else:
+            v_absent += 1
+        vote_expected.append({
+            "vote_num": vs["vote_num"],
+            "time": ts,
+            "status": status,
+            "title": vs.get("title"),
+            "link": vs.get("link"),
+        })
+    v_total = len(vote_expected)
+    v_pct = (v_attended / v_total * 100) if v_total else None
+
     return render_template("member_attendance.html",
                            member=member,
                            current_lthing=lthing,
                            attended=attended,
                            total=total,
                            pct=pct,
-                           records=records)
+                           records=records,
+                           vote_expected=vote_expected,
+                           vote_attended=v_attended,
+                           vote_notified=v_notified,
+                           vote_absent=v_absent,
+                           vote_total=v_total,
+                           vote_pct=v_pct)
 
+
+
+@bp.route("/votes/report")
+def vote_report():
+    """
+    Per-member vote report: expected vote sessions (based on inn/út þingseta) and recorded vote/absence.
+    """
+    engine = _get_engine()
+    with Session(engine) as session:
+        lthing = current_lthing(session)
+        people = session.execute(
+            select(models.ThingmannalistiThingmadur).order_by(models.ThingmannalistiThingmadur.leaf_nafn)
+        ).scalars().all()
+        seats = session.execute(
+            select(MemberSeat).where(MemberSeat.lthing == lthing)
+        ).scalars().all() if manual_models else []
+
+        vote_sessions = []
+        if manual_models and hasattr(manual_models, "VoteSession"):
+            vote_sessions = session.execute(
+                select(manual_models.VoteSession.vote_num, manual_models.VoteSession.time)
+                .where(manual_models.VoteSession.lthing == lthing)
+            ).all()
+        if not vote_sessions:
+            vote_sessions = session.execute(
+                select(
+                    models.AtkvaedagreidslurAtkvaedagreidsla.attr_atkvaedagreidslunumer,
+                    models.AtkvaedagreidslurAtkvaedagreidsla.leaf_timi,
+                )
+            ).all()
+
+        all_vote_details = session.execute(
+            select(VoteDetail.vote_num, VoteDetail.voter_id, VoteDetail.vote)
+        ).all() if manual_models else []
+
+    intervals_by_member = _effective_intervals(seats)
+
+    vote_map_by_member: Dict[int, Dict[int, str]] = defaultdict(dict)
+    for vn, mid, vote in all_vote_details:
+        if vn is None or mid is None:
+            continue
+        try:
+            vote_map_by_member[int(mid)][int(vn)] = vote
+        except Exception:
+            continue
+
+    vote_meta: Dict[int, Dict[str, Any]] = {}
+    for v in votes_full:
+        try:
+            num = int(v.attr_atkvaedagreidslunumer)
+        except Exception:
+            continue
+        title = getattr(v, "leaf_mal_malsheiti", None)
+        link = (
+            getattr(v, "leaf_nanar_html", None)
+            or getattr(v, "leaf_mal_html", None)
+            or getattr(v, "leaf_nanar_xml", None)
+            or getattr(v, "leaf_mal_xml", None)
+            or getattr(v, "leaf_thingskjal_slod_xml", None)
+        )
+        vote_meta[num] = {
+            "title": title,
+            "html": link,
+        }
+
+    sessions: List[Dict[str, Any]] = []
+    for vn, t in vote_sessions:
+        if vn is None:
+            continue
+        ts = (parse_date(t) or _parse_iso(t)) if t else None
+        meta = vote_meta.get(int(vn), {})
+        sessions.append({
+            "vote_num": int(vn),
+            "time": ts,
+            "title": meta.get("title"),
+            "link": meta.get("html"),
+        })
+    sessions.sort(key=lambda s: s["vote_num"])
+
+    report = []
+    for p in people:
+        if p.attr_id is None:
+            continue
+        mid = int(p.attr_id)
+        intervals = intervals_by_member.get(mid, [])
+        if not intervals:
+            continue
+        expected = []
+        attended = 0
+        notified = 0
+        absent = 0
+        for vs in sessions:
+            ts = vs["time"]
+            include = False
+            if intervals:
+                if ts:
+                    include = _in_intervals(ts, intervals)
+                else:
+                    include = True  # no timestamp on vote -> include to be safe
+            if not include:
+                continue
+            vote = vote_map_by_member.get(mid, {}).get(vs["vote_num"])
+            status = vote or "fjarverandi"
+            if vote in ("já", "nei", "greiðir ekki atkvæði"):
+                attended += 1
+            elif vote == "boðaði fjarvist":
+                notified += 1
+            else:
+                absent += 1
+            expected.append({
+                "vote_num": vs["vote_num"],
+                "time": ts,
+                "status": status,
+                "title": vs.get("title"),
+                "link": vs.get("link"),
+            })
+        if not expected:
+            continue
+        total = len(expected)
+        pct = attended / total * 100 if total else None
+        report.append({
+            "member": p,
+            "expected": expected,
+            "attended": attended,
+            "notified": notified,
+            "absent": absent,
+            "total": total,
+            "pct": pct,
+        })
+
+    report.sort(key=lambda r: icelandic_sort_key(r["member"].leaf_nafn or ""))
+
+    return render_template(
+        "vote_report.html",
+        report=report,
+        current_lthing=lthing,
+    )
 
 
 @bp.route("/committees")
