@@ -1231,13 +1231,7 @@ def member_attendance(member_id: int):
         except Exception:
             continue
         title = getattr(v, "leaf_mal_malsheiti", None)
-        link = (
-            getattr(v, "leaf_nanar_html", None)
-            or getattr(v, "leaf_mal_html", None)
-            or getattr(v, "leaf_nanar_xml", None)
-            or getattr(v, "leaf_mal_xml", None)
-            or getattr(v, "leaf_thingskjal_slod_xml", None)
-        )
+        link = f"https://www.althingi.is/thingstorf/thingmalin/atkvaedagreidsla/?nnafnak={num}"
         vote_meta[num] = {"title": title, "link": link}
 
     sessions: List[Dict[str, Any]] = []
