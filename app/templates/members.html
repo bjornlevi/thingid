@@ -4,7 +4,7 @@
     <div>
         <p class="eyebrow">Þingmannalisti</p>
         <h1>Þingmenn eftir flokkum</h1>
-        <p class="lede">Síað eftir skammstöfun flokka; opnaðu til að sjá tengla á opinberar síður hvers þingmanns.</p>
+        <p class="lede">Skoðaðu þingmenn eftir flokkum og smelltu til að sjá mætingu, ræður og opinberar síður.</p>
     </div>
 </section>
 
@@ -39,8 +39,11 @@
                                     <span class="pill neutral">Mæting á nefndarfundi: {{ "%.1f"|format(m.committee_att_pct) }}%</span>
                                 {% endif %}
                             </div>
-                            <div>
+                            <div class="links">
                                 <a class="pill link" href="{{ url_for('main.member_attendance', member_id=m.attr_id) }}">Sjá mætingarskýrslu</a>
+                                {% if m.speech_count %}
+                                    <a class="pill link" href="{{ url_for('main.speeches', member_id=m.attr_id) }}">Þingræður ({{ m.speech_count }})</a>
+                                {% endif %}
                             </div>
                             <div class="links">
                                 {% if m.attr_id %}

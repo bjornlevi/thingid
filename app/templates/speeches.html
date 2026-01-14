@@ -1,0 +1,296 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+    <div>
+        <p class="eyebrow">Þingræður</p>
+        <h1>Ræður á Alþingi</h1>
+        <p class="lede">Yfirlit yfir ræður á yfirstandandi löggjafarþingi: lengd, hraði og virkustu ræðumenn.</p>
+    </div>
+    {% if summary %}
+        <div class="card">
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-label">Fjöldi ræðna</div>
+                    <div class="metric-value">{{ summary.total or 0 }}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Fjöldi ræðumanna</div>
+                    <div class="metric-value">{{ summary.total_speakers or 0 }}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Meðalorð á ræðu</div>
+                    <div class="metric-value">{{ summary.avg_words|default(0)|round(0) }}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Meðalhraði (orð/mín)</div>
+                    <div class="metric-value">
+                        {% if summary.avg_wpm %}{{ "%.1f"|format(summary.avg_wpm) }}{% else %}—{% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+    {% if error %}
+        <p class="text-danger">{{ error }}</p>
+    {% endif %}
+</section>
+
+<section class="stack">
+    <div class="panel">
+        <div class="panel-head">
+            <div>
+                <p class="eyebrow">Ræður</p>
+                <h2>Lengd og hraði</h2>
+            </div>
+        </div>
+        <div class="panel-body stat-list-grid">
+            <div>
+                <h3>Lengstu ræður</h3>
+                <ul class="list large">
+                    {% for s in stats.longest %}
+                        <li>
+                            <div class="row">
+                                <div>
+                                    <strong>{{ s.speaker }}</strong>
+                                    {% if s.party %}<span class="pill subtle">{{ s.party }}</span>{% endif %}
+                                </div>
+                                <span class="pill neutral">{{ s.words or "—" }} orð{% if s.duration %} · {{ s.duration }}{% endif %}{% if s.wpm %} · {{ "%.1f"|format(s.wpm) }} orð/mín{% endif %}</span>
+                            </div>
+                            <div class="row">
+                                <span class="muted">{{ s.title or "Ónefnt mál" }}</span>
+                                {% if s.date %}<span class="muted">{{ s.date }}</span>{% endif %}
+                                {% if s.html %}<a href="{{ s.html }}">Lesa</a>{% elif s.xml %}<a href="{{ s.xml }}">XML</a>{% endif %}
+                            </div>
+                        </li>
+                    {% else %}
+                        <li class="muted">Engar ræður fundust.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div>
+                <h3>Stystu ræður</h3>
+                <ul class="list large">
+                    {% for s in stats.shortest %}
+                        <li>
+                            <div class="row">
+                                <div>
+                                    <strong>{{ s.speaker }}</strong>
+                                    {% if s.party %}<span class="pill subtle">{{ s.party }}</span>{% endif %}
+                                </div>
+                                <span class="pill neutral">{{ s.words or "—" }} orð{% if s.duration %} · {{ s.duration }}{% endif %}{% if s.wpm %} · {{ "%.1f"|format(s.wpm) }} orð/mín{% endif %}</span>
+                            </div>
+                            <div class="row">
+                                <span class="muted">{{ s.title or "Ónefnt mál" }}</span>
+                                {% if s.date %}<span class="muted">{{ s.date }}</span>{% endif %}
+                                {% if s.html %}<a href="{{ s.html }}">Lesa</a>{% elif s.xml %}<a href="{{ s.xml }}">XML</a>{% endif %}
+                            </div>
+                        </li>
+                    {% else %}
+                        <li class="muted">Engar ræður fundust.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div>
+                <h3>Hraðustu ræður</h3>
+                <ul class="list large">
+                    {% for s in stats.fastest %}
+                        <li>
+                            <div class="row">
+                                <div>
+                                    <strong>{{ s.speaker }}</strong>
+                                    {% if s.party %}<span class="pill subtle">{{ s.party }}</span>{% endif %}
+                                </div>
+                                <span class="pill neutral">{% if s.wpm %}{{ "%.1f"|format(s.wpm) }} orð/mín{% else %}—{% endif %}{% if s.words %} · {{ s.words }} orð{% endif %}{% if s.duration %} · {{ s.duration }}{% endif %}</span>
+                            </div>
+                            <div class="row">
+                                <span class="muted">{{ s.title or "Ónefnt mál" }}</span>
+                                {% if s.date %}<span class="muted">{{ s.date }}</span>{% endif %}
+                                {% if s.html %}<a href="{{ s.html }}">Lesa</a>{% elif s.xml %}<a href="{{ s.xml }}">XML</a>{% endif %}
+                            </div>
+                        </li>
+                    {% else %}
+                        <li class="muted">Engar ræður fundust.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div>
+                <h3>Hægustu ræður</h3>
+                <ul class="list large">
+                    {% for s in stats.slowest %}
+                        <li>
+                            <div class="row">
+                                <div>
+                                    <strong>{{ s.speaker }}</strong>
+                                    {% if s.party %}<span class="pill subtle">{{ s.party }}</span>{% endif %}
+                                </div>
+                                <span class="pill neutral">{% if s.wpm %}{{ "%.1f"|format(s.wpm) }} orð/mín{% else %}—{% endif %}{% if s.words %} · {{ s.words }} orð{% endif %}{% if s.duration %} · {{ s.duration }}{% endif %}</span>
+                            </div>
+                            <div class="row">
+                                <span class="muted">{{ s.title or "Ónefnt mál" }}</span>
+                                {% if s.date %}<span class="muted">{{ s.date }}</span>{% endif %}
+                                {% if s.html %}<a href="{{ s.html }}">Lesa</a>{% elif s.xml %}<a href="{{ s.xml }}">XML</a>{% endif %}
+                            </div>
+                        </li>
+                    {% else %}
+                        <li class="muted">Engar ræður fundust.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="panel-head">
+            <div>
+                <p class="eyebrow">Þingmenn</p>
+                <h2>Meðalræður og virkni</h2>
+            </div>
+        </div>
+        <div class="panel-body stat-list-grid">
+            <div>
+                <h3>Lengri meðalræður</h3>
+                <ul class="list large">
+                    {% for m in stats.avg_length %}
+                        <li>
+                            <div class="row">
+                                <div>
+                                    <strong>{{ m.name }}</strong>
+                                    {% if m.party %}<span class="pill subtle">{{ m.party }}</span>{% endif %}
+                                </div>
+                                <span class="pill neutral">{{ m.avg_words|round(0) }} orð að meðaltali</span>
+                            </div>
+                            <div class="row">
+                                <span class="muted">{{ m.count }} ræður</span>
+                                <a href="{{ url_for('main.speeches', member_id=m.member_id) }}">Sjá ræður</a>
+                            </div>
+                        </li>
+                    {% else %}
+                        <li class="muted">Engin gögn.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div>
+                <h3>Hraðari meðalhraði</h3>
+                <ul class="list large">
+                    {% for m in stats.avg_speed %}
+                        <li>
+                            <div class="row">
+                                <div>
+                                    <strong>{{ m.name }}</strong>
+                                    {% if m.party %}<span class="pill subtle">{{ m.party }}</span>{% endif %}
+                                </div>
+                                <span class="pill neutral">{% if m.avg_wpm %}{{ "%.1f"|format(m.avg_wpm) }} orð/mín{% else %}—{% endif %}</span>
+                            </div>
+                            <div class="row">
+                                <span class="muted">{{ m.count }} ræður</span>
+                                <a href="{{ url_for('main.speeches', member_id=m.member_id) }}">Sjá ræður</a>
+                            </div>
+                        </li>
+                    {% else %}
+                        <li class="muted">Engin gögn.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div>
+                <h3>Mestur fjöldi ræðna</h3>
+                <ul class="list large">
+                    {% for m in stats.most_speeches %}
+                        <li>
+                            <div class="row">
+                                <div>
+                                    <strong>{{ m.name }}</strong>
+                                    {% if m.party %}<span class="pill subtle">{{ m.party }}</span>{% endif %}
+                                </div>
+                                <span class="pill neutral">{{ m.count }} ræður</span>
+                            </div>
+                            <div class="row">
+                                <span class="muted">{{ m.avg_words|round(0) }} orð að meðaltali</span>
+                                <a href="{{ url_for('main.speeches', member_id=m.member_id) }}">Sjá ræður</a>
+                            </div>
+                        </li>
+                    {% else %}
+                        <li class="muted">Engin gögn.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div>
+                <h3>Fæstar ræður</h3>
+                <ul class="list large">
+                    {% for m in stats.fewest_speeches %}
+                        <li>
+                            <div class="row">
+                                <div>
+                                    <strong>{{ m.name }}</strong>
+                                    {% if m.party %}<span class="pill subtle">{{ m.party }}</span>{% endif %}
+                                </div>
+                                <span class="pill neutral">{{ m.count }} ræður</span>
+                            </div>
+                            <div class="row">
+                                <span class="muted">{{ m.avg_words|round(0) }} orð að meðaltali</span>
+                                <a href="{{ url_for('main.speeches', member_id=m.member_id) }}">Sjá ræður</a>
+                            </div>
+                        </li>
+                    {% else %}
+                        <li class="muted">Engin gögn.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="panel-head">
+            <div>
+                <p class="eyebrow">Ræður eftir þingmanni</p>
+                <h2>Veldu þingmann</h2>
+            </div>
+        </div>
+        <div class="panel-body">
+            <div class="filter-row">
+                {% for m in member_options %}
+                    {% set active = member_focus and member_focus.member_id == m.member_id %}
+                    <a class="pill filter-pill{% if active %} active{% endif %}" href="{{ url_for('main.speeches', member_id=m.member_id) }}">
+                        {{ m.name }}{% if m.party %} · {{ m.party }}{% endif %} ({{ m.count }})
+                    </a>
+                {% else %}
+                    <span class="muted">Engar ræður skráðar.</span>
+                {% endfor %}
+            </div>
+
+            {% if member_focus %}
+                <div class="row">
+                    <div>
+                        <p class="eyebrow">Yfirlit</p>
+                        <h3>{{ member_focus.member.leaf_nafn if member_focus.member else "Þingmaður" }}</h3>
+                        <p class="muted">
+                            {{ member_focus.count }} ræður ·
+                            {% if member_focus.avg_words %}{{ member_focus.avg_words|round(0) }} orð að meðaltali{% endif %}
+                            {% if member_focus.avg_wpm %} · {{ "%.1f"|format(member_focus.avg_wpm) }} orð/mín að meðaltali{% endif %}
+                        </p>
+                    </div>
+                </div>
+                <ul class="list large">
+                    {% for s in member_focus.speeches %}
+                        <li>
+                            <div class="row">
+                                <div>
+                                    <strong>{{ s.title or "Ónefnt mál" }}</strong>
+                                    {% if s.date %}<span class="muted">{{ s.date }}</span>{% endif %}
+                                </div>
+                                <span class="pill neutral">{{ s.words or "—" }} orð{% if s.duration %} · {{ s.duration }}{% endif %}{% if s.wpm %} · {{ "%.1f"|format(s.wpm) }} orð/mín{% endif %}</span>
+                            </div>
+                            <div class="row">
+                                {% if s.html %}<a href="{{ s.html }}">Lesa</a>{% elif s.xml %}<a href="{{ s.xml }}">XML</a>{% endif %}
+                            </div>
+                        </li>
+                    {% else %}
+                        <li class="muted">Engar ræður fundust fyrir þennan þingmann.</li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <p class="muted">Veldu þingmann til að skoða nýjustu ræður.</p>
+            {% endif %}
+        </div>
+    </div>
+</section>
+{% endblock %}

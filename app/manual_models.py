@@ -153,3 +153,35 @@ class IssueMetrics(models.Base):
     __table_args__ = (
         models.UniqueConstraint("lthing", "malnr", name="uq_issue_metrics_malnr"),
     )
+
+
+class Speech(models.Base):
+    __tablename__ = "speech"
+
+    id = models.Column(models.Integer, primary_key=True, autoincrement=True)
+    lthing = models.Column(models.Integer, index=True)
+    speech_id = models.Column(models.Text, index=True)
+    member_id = models.Column(models.Integer, index=True, nullable=True)
+    speaker_name = models.Column(models.Text, nullable=True)
+    speaker_role = models.Column(models.Text, nullable=True)
+    date = models.Column(models.Text, nullable=True)
+    fundur = models.Column(models.Integer, nullable=True)
+    fundarheiti = models.Column(models.Text, nullable=True)
+    start_time = models.Column(models.Text, nullable=True)
+    end_time = models.Column(models.Text, nullable=True)
+    duration_seconds = models.Column(models.Integer, nullable=True)
+    word_count = models.Column(models.Integer, nullable=True)
+    words_per_minute = models.Column(models.Float, nullable=True)
+    issue_malnr = models.Column(models.Integer, nullable=True)
+    issue_malsflokkur = models.Column(models.Text, nullable=True)
+    issue_malsheiti = models.Column(models.Text, nullable=True)
+    kind = models.Column(models.Text, nullable=True)
+    umraeda = models.Column(models.Text, nullable=True)
+    audio_url = models.Column(models.Text, nullable=True)
+    html_url = models.Column(models.Text, nullable=True)
+    xml_url = models.Column(models.Text, nullable=True)
+    raw_text = models.Column(models.Text, nullable=True)
+
+    __table_args__ = (
+        models.UniqueConstraint("lthing", "speech_id", name="uq_speech_lthing_id"),
+    )

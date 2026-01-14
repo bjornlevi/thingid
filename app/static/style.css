@@ -189,6 +189,32 @@ details[open] summary { color: var(--accent); }
     margin-bottom: 0.5rem;
 }
 
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+}
+.metric-card {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.75rem;
+    background: rgba(255,255,255,0.06);
+}
+.metric-label {
+    color: var(--muted);
+    font-size: 0.85rem;
+}
+.metric-value {
+    font-size: 1.35rem;
+    font-weight: 700;
+}
+.stat-list-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 1rem;
+}
+.stat-list-grid h3 { margin-top: 0; }
+
 .plain-link { color: var(--muted); font-size: 0.9rem; }
 
 .stack { display: flex; flex-direction: column; gap: 0.75rem; }

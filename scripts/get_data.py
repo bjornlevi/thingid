@@ -29,7 +29,7 @@ import unicodedata
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, parse_qs
 from pathlib import Path
 
 # Ensure project root is on sys.path for local imports (app.*)
@@ -715,6 +715,142 @@ def parse_vote_details(vote_detail_xml: ET.Element) -> Tuple[Dict[str, Any], Lis
     return summary, out
 
 
+def speech_id_from_url(xml_url: Optional[str]) -> Optional[str]:
+    if not xml_url:
+        return None
+    try:
+        path = urlparse(xml_url).path
+        if not path:
+            return None
+        return Path(path).stem or path.rsplit("/", 1)[-1]
+    except Exception:
+        return None
+
+
+def member_id_from_url(nanar_url: Optional[str]) -> Optional[int]:
+    if not nanar_url:
+        return None
+    try:
+        qs = parse_qs(urlparse(nanar_url).query)
+        if "nr" in qs and qs["nr"]:
+            return int(qs["nr"][0])
+    except Exception:
+        return None
+    return None
+
+
+def speech_text_from_xml(detail_xml: ET.Element) -> str:
+    text_node = None
+    for node in detail_xml.iter():
+        tag_plain = unicodedata.normalize("NFKD", strip_ns(node.tag)).encode("ascii", "ignore").decode("ascii").lower()
+        if tag_plain == "raedutexti":
+            text_node = node
+            break
+    if text_node is None:
+        return ""
+    paras: List[str] = []
+    for child in list(text_node):
+        if not isinstance(child.tag, str):
+            continue
+        piece = " ".join(t.strip() for t in child.itertext() if (t or "").strip())
+        if piece:
+            paras.append(piece)
+    if not paras:
+        return " ".join(t.strip() for t in text_node.itertext() if (t or "").strip())
+    return "\n".join(paras)
+
+
+def populate_speeches(
+    session: Session,
+    lthing: int,
+    models_mod: Any,
+    manual_models: Any,
+    fetcher: Fetcher,
+    max_records: Optional[int] = None,
+) -> int:
+    """
+    Fetch all speeches for the given session and store normalized entries in manual_models.Speech.
+    Relies on raedulisti__raeda table for metadata and downloads each speech XML for text + word counts.
+    """
+    if not manual_models or not hasattr(manual_models, "Speech"):
+        return 0
+    Speech = manual_models.Speech
+    Raedulisti = getattr(models_mod, "RaedulistiRaeda")
+    # Clear existing rows for this lthing to avoid stale data
+    try:
+        session.execute(text("DELETE FROM speech WHERE lthing=:lt"), {"lt": lthing})
+        session.commit()
+    except Exception:
+        session.rollback()
+    speeches: List[Any] = []
+    rows = session.execute(
+        select(Raedulisti).where(Raedulisti.ingest_lthing == lthing)
+    ).scalars().all()
+    if max_records is not None:
+        rows = rows[:max_records]
+    for idx, row in enumerate(rows):
+        xml_url = getattr(row, "leaf_slodir_xml", None) or getattr(row, "leaf_slodir_html", None)
+        speech_key = speech_id_from_url(xml_url) or getattr(row, "leaf_raedahofst", None) or f"speech-{idx}"
+        if not xml_url:
+            continue
+        try:
+            detail_root = parse_xml(fetcher.get(xml_url), xml_url)
+            speech_text = speech_text_from_xml(detail_root)
+        except Exception as e:
+            print(f"[warn] failed to fetch speech xml {xml_url}: {e}")
+            speech_text = ""
+            detail_root = None
+        wc = len(re.findall(r"\w+", speech_text, flags=re.UNICODE)) if speech_text else 0
+        start_dt = parse_date(getattr(row, "leaf_raedahofst", None))
+        end_dt = parse_date(getattr(row, "leaf_raedulauk", None))
+        duration_seconds = None
+        if start_dt and end_dt:
+            try:
+                delta = end_dt - start_dt
+                seconds = int(delta.total_seconds())
+                duration_seconds = seconds if seconds >= 0 else None
+            except Exception:
+                duration_seconds = None
+        wpm = None
+        if duration_seconds and duration_seconds > 0 and wc:
+            wpm = wc / (duration_seconds / 60.0)
+        m_id = member_id_from_url(getattr(row, "leaf_raedumadur_nanar", None))
+        speeches.append(Speech(
+            lthing=lthing,
+            speech_id=speech_key,
+            member_id=m_id,
+            speaker_name=getattr(row, "leaf_raedumadur_nafn", None),
+            speaker_role=getattr(row, "leaf_raedumadur_radherra", None) or getattr(row, "leaf_raedumadur_forsetialthingis", None) or getattr(row, "leaf_raedumadur_forsetiislands", None),
+            date=getattr(row, "leaf_dagur", None),
+            fundur=getattr(row, "leaf_fundur", None),
+            fundarheiti=getattr(row, "leaf_fundarheiti", None),
+            start_time=getattr(row, "leaf_raedahofst", None),
+            end_time=getattr(row, "leaf_raedulauk", None),
+            duration_seconds=duration_seconds,
+            word_count=wc,
+            words_per_minute=wpm,
+            issue_malnr=getattr(row, "leaf_mal_malsnumer", None),
+            issue_malsflokkur=getattr(row, "leaf_mal_malsflokkur", None),
+            issue_malsheiti=getattr(row, "leaf_mal_malsheiti", None),
+            kind=getattr(row, "leaf_tegundraedu", None),
+            umraeda=getattr(row, "leaf_umraeda", None),
+            audio_url=getattr(row, "leaf_slodir_hljod", None),
+            html_url=getattr(row, "leaf_slodir_html", None),
+            xml_url=xml_url,
+            raw_text=speech_text,
+        ))
+        if len(speeches) % 200 == 0 and speeches:
+            session.add_all(speeches)
+            session.commit()
+            speeches = []
+    if speeches:
+        session.add_all(speeches)
+        session.commit()
+    total = session.execute(text("SELECT COUNT(*) FROM speech WHERE lthing=:lt"), {"lt": lthing}).scalar_one_or_none() or 0
+    print(f"[ok] speeches: stored {total} rows for lthing {lthing}")
+    return total
+
+
 def parse_member_seats(thingseta_xml: ET.Element, lthing: int) -> List[Dict[str, Any]]:
     seats: List[Dict[str, Any]] = []
     for ts in thingseta_xml.iter():
@@ -868,11 +1004,22 @@ def main() -> int:
     ap.add_argument("--sleep", type=float, default=0.15, help="Sleep between requests")
     ap.add_argument("--cache-dir", default="data/cache", help="Directory for HTTP cache (default: data/cache)")
     ap.add_argument("--force-fetch", action="store_true", help="Ignore cache and re-download all resources")
+    ap.add_argument("--speeches-only", action="store_true", help="Only refresh raedur (skip other resources; keeps existing DB)")
+    ap.add_argument("--skip-speeches", action="store_true", help="Skip fetching individual raedur XML documents")
     args = ap.parse_args()
 
     # Load schema map
     with open(args.schema, "r", encoding="utf-8") as f:
         schema_map = json.load(f)
+
+    resources = schema_map.get("resources", [])
+    if args.speeches_only:
+        resources = [r for r in resources if r.get("table") == "raedulisti__raeda"]
+        if not resources:
+            raise RuntimeError("schema_map is missing raedulisti resource required for --speeches-only")
+
+    if args.speeches_only:
+        args.reset_db = False
 
     # Ensure DB directory exists and reset if requested
     db_path = os.path.abspath(args.db)
@@ -916,7 +1063,7 @@ def main() -> int:
         issue_documents: List[Any] = []
         vote_details_to_add: List[Any] = []
         seats_to_add: List[Any] = []
-        for r in schema_map["resources"]:
+        for r in resources:
             if "error" in r:
                 continue
             name = r["name"]
@@ -1215,7 +1362,7 @@ def main() -> int:
                 print(f"[ok] þingmannalisti: stored {len(seats_to_add)} member seats")
 
     # Extra: cache nefndarfundir + fundargerðir for this þing to support attendance parsing
-    if args.cache_dir:
+    if args.cache_dir and not args.speeches_only:
         try:
             cache_nefndarfundir(fetcher, lthing)
         except Exception as e:
@@ -1226,41 +1373,47 @@ def main() -> int:
         with Session(engine) as session:
             # map abbrev -> member_id
             abbr_map = {}
-            people = session.execute(select(models.ThingmannalistiThingmadur)).scalars().all()
-            for p in people:
-                if p.attr_id is not None and p.leaf_skammstofun:
-                    abbr_map[_norm_tag(p.leaf_skammstofun)] = int(p.attr_id)
-            # derived issue metrics (answer status/latency) for written questions
-            if hasattr(manual_models, "IssueMetrics") and hasattr(manual_models, "IssueDocument"):
+            if not args.speeches_only:
+                people = session.execute(select(models.ThingmannalistiThingmadur)).scalars().all()
+                for p in people:
+                    if p.attr_id is not None and p.leaf_skammstofun:
+                        abbr_map[_norm_tag(p.leaf_skammstofun)] = int(p.attr_id)
+                # derived issue metrics (answer status/latency) for written questions
+                if hasattr(manual_models, "IssueMetrics") and hasattr(manual_models, "IssueDocument"):
+                    try:
+                        session.execute(text("DELETE FROM issue_metrics WHERE lthing=:lt"), {"lt": lthing})
+                        issue_rows = session.execute(select(models.ThingmalalistiMal)).scalars().all()
+                        issue_docs = session.execute(
+                            select(manual_models.IssueDocument).where(manual_models.IssueDocument.lthing == lthing)
+                        ).scalars().all()
+                        ath_map: Dict[int, str] = {}
+                        for nr, ath in session.execute(
+                            select(models.ThingskjalalistiThingskjal.attr_skjalsnumer, models.ThingskjalalistiThingskjal.leaf_athugasemd)
+                        ).all():
+                            if nr is None or not ath:
+                                continue
+                            try:
+                                ath_map[int(nr)] = ath
+                            except Exception:
+                                continue
+                        metrics = compute_issue_metrics(lthing, issue_docs, issue_rows, ath_map, manual_models)
+                        if metrics:
+                            session.add_all(metrics)
+                        session.commit()
+                        print(f"[ok] issue_metrics: stored {len(metrics)} rows")
+                    except Exception as e:
+                        session.rollback()
+                        print(f"[warn] issue_metrics failed: {e}")
+                # vote sessions
+                populate_vote_sessions_and_attendance(session, lthing, manual_models)
+                # committee attendance
+                cache_dir = Path(args.cache_dir)
+                populate_committee_attendance(session, cache_dir, lthing, abbr_map, manual_models)
+            if not args.skip_speeches:
                 try:
-                    session.execute(text("DELETE FROM issue_metrics WHERE lthing=:lt"), {"lt": lthing})
-                    issue_rows = session.execute(select(models.ThingmalalistiMal)).scalars().all()
-                    issue_docs = session.execute(
-                        select(manual_models.IssueDocument).where(manual_models.IssueDocument.lthing == lthing)
-                    ).scalars().all()
-                    ath_map: Dict[int, str] = {}
-                    for nr, ath in session.execute(
-                        select(models.ThingskjalalistiThingskjal.attr_skjalsnumer, models.ThingskjalalistiThingskjal.leaf_athugasemd)
-                    ).all():
-                        if nr is None or not ath:
-                            continue
-                        try:
-                            ath_map[int(nr)] = ath
-                        except Exception:
-                            continue
-                    metrics = compute_issue_metrics(lthing, issue_docs, issue_rows, ath_map, manual_models)
-                    if metrics:
-                        session.add_all(metrics)
-                    session.commit()
-                    print(f"[ok] issue_metrics: stored {len(metrics)} rows")
+                    populate_speeches(session, lthing, models, manual_models, fetcher, max_records=args.max_records)
                 except Exception as e:
-                    session.rollback()
-                    print(f"[warn] issue_metrics failed: {e}")
-            # vote sessions
-            populate_vote_sessions_and_attendance(session, lthing, manual_models)
-            # committee attendance
-            cache_dir = Path(args.cache_dir)
-            populate_committee_attendance(session, cache_dir, lthing, abbr_map, manual_models)
+                    print(f"[warn] populate_speeches failed: {e}")
 
     print(f"Done. DB: {args.db}")
     return 0

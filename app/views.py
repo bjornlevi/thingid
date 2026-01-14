@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from flask import Blueprint, current_app, render_template
+from flask import Blueprint, current_app, render_template, request
 from sqlalchemy import select, func, text
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
@@ -194,6 +194,22 @@ def _fmt_duration(start: Optional[dt.datetime], end: Optional[dt.datetime]) -> O
     if seconds < 0:
         return None
     minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+    return f"{minutes:02d}:{sec:02d}"
+
+
+def _fmt_seconds(seconds: Optional[int]) -> Optional[str]:
+    if seconds is None:
+        return None
+    try:
+        sec = int(seconds)
+    except Exception:
+        return None
+    if sec < 0:
+        return None
+    minutes, sec = divmod(sec, 60)
     hours, minutes = divmod(minutes, 60)
     if hours:
         return f"{hours:02d}:{minutes:02d}:{sec:02d}"
@@ -607,6 +623,7 @@ def index():
 @bp.route("/members")
 def members():
     engine = _get_engine()
+    speech_counts: Dict[int, int] = {}
     with Session(engine) as session:
         people = session.execute(
             select(models.ThingmannalistiThingmadur).order_by(models.ThingmannalistiThingmadur.leaf_nafn)
@@ -658,6 +675,16 @@ def members():
                 ).scalars().all()
             except OperationalError:
                 committee_attendance_rows = []
+        if manual_models and hasattr(manual_models, "Speech"):
+            try:
+                rows = session.execute(
+                    select(manual_models.Speech.member_id, func.count())
+                    .where(manual_models.Speech.lthing == lthing, manual_models.Speech.member_id.is_not(None))
+                    .group_by(manual_models.Speech.member_id)
+                ).all()
+                speech_counts = {int(mid): cnt for mid, cnt in rows if mid is not None}
+            except Exception:
+                speech_counts = {}
 
     docs_map = {}
     for d in docs_by_nr:
@@ -877,6 +904,7 @@ def members():
         p.committee_att_count = ca_att
         p.committee_att_total = ca_total
         p.committee_att_pct = (ca_att / ca_total * 100) if ca_total else None
+        p.speech_count = speech_counts.get(mid, 0)
 
     def party_for_member(m):
         if getattr(m, "current_seat", None) and m.current_seat.party_name:
@@ -1291,6 +1319,171 @@ def member_attendance(member_id: int):
                            vote_total=v_total,
                            vote_pct=v_pct)
 
+
+
+@bp.route("/speeches")
+def speeches():
+    Speech = getattr(manual_models, "Speech", None) if manual_models else None
+    empty_stats = {
+        "longest": [],
+        "shortest": [],
+        "fastest": [],
+        "slowest": [],
+        "avg_length": [],
+        "avg_speed": [],
+        "most_speeches": [],
+        "fewest_speeches": [],
+    }
+    engine = _get_engine()
+    with Session(engine) as session:
+        lthing = current_lthing(session)
+        people = session.execute(
+            select(models.ThingmannalistiThingmadur)
+        ).scalars().all()
+        member_map = {}
+        for p in people:
+            if getattr(p, "attr_id", None) is not None:
+                try:
+                    member_map[int(p.attr_id)] = p
+                except Exception:
+                    continue
+        if not Speech:
+            return render_template("speeches.html",
+                                   current_lthing=lthing,
+                                   summary=None,
+                                   stats=empty_stats,
+                                   member_focus=None,
+                                   member_options=[],
+                                   error="Engin ræðugögn tiltæk.")
+        filters = []
+        if lthing is not None:
+            filters.append(Speech.lthing == lthing)
+
+        total_speeches = session.execute(select(func.count()).where(*filters)).scalar() or 0
+        total_words = session.execute(
+            select(func.sum(Speech.word_count)).where(*(filters + [Speech.word_count.is_not(None)]))
+        ).scalar() or 0
+        total_speakers = session.execute(
+            select(func.count(func.distinct(Speech.member_id))).where(*(filters + [Speech.member_id.is_not(None)]))
+        ).scalar() or 0
+        avg_words = (total_words / total_speeches) if total_speeches else None
+        avg_wpm_all = session.execute(
+            select(func.avg(Speech.words_per_minute)).where(*(filters + [Speech.words_per_minute.is_not(None)]))
+        ).scalar()
+
+        def speech_item(s):
+            member = member_map.get(int(s.member_id)) if getattr(s, "member_id", None) is not None else None
+            title = getattr(s, "issue_malsheiti", None) or getattr(s, "kind", None) or getattr(s, "umraeda", None)
+            return {
+                "id": s.id,
+                "member_id": getattr(s, "member_id", None),
+                "speaker": getattr(member, "leaf_nafn", None) or getattr(s, "speaker_name", None) or "Ónafngreindur",
+                "party": getattr(member, "leaf_skammstofun", None),
+                "words": getattr(s, "word_count", None),
+                "wpm": getattr(s, "words_per_minute", None),
+                "duration": _fmt_seconds(getattr(s, "duration_seconds", None)),
+                "date": getattr(s, "date", None),
+                "title": title,
+                "html": getattr(s, "html_url", None),
+                "xml": getattr(s, "xml_url", None),
+            }
+
+        longest = session.execute(
+            select(Speech).where(*(filters + [Speech.word_count.is_not(None)])).order_by(Speech.word_count.desc()).limit(5)
+        ).scalars().all()
+        shortest = session.execute(
+            select(Speech).where(*(filters + [Speech.word_count.is_not(None), Speech.word_count > 0]))
+            .order_by(Speech.word_count.asc()).limit(5)
+        ).scalars().all()
+        fastest = session.execute(
+            select(Speech).where(*(filters + [Speech.words_per_minute.is_not(None)])).order_by(Speech.words_per_minute.desc()).limit(5)
+        ).scalars().all()
+        slowest = session.execute(
+            select(Speech).where(*(filters + [Speech.words_per_minute.is_not(None), Speech.words_per_minute > 0]))
+            .order_by(Speech.words_per_minute.asc()).limit(5)
+        ).scalars().all()
+
+        member_rows = session.execute(
+            select(
+                Speech.member_id,
+                func.count().label("count"),
+                func.avg(Speech.word_count).label("avg_words"),
+                func.avg(Speech.words_per_minute).label("avg_wpm"),
+                func.sum(Speech.word_count).label("sum_words"),
+                func.max(Speech.speaker_name).label("speaker_name"),
+            ).where(*(filters + [Speech.member_id.is_not(None)])).group_by(Speech.member_id)
+        ).all()
+
+        member_stats = []
+        for mid, count, avg_w, avg_wpm, sum_w, speaker_name in member_rows:
+            if mid is None:
+                continue
+            member = member_map.get(int(mid))
+            member_stats.append({
+                "member_id": int(mid),
+                "name": getattr(member, "leaf_nafn", None) or speaker_name or f"Þingmaður {mid}",
+                "party": getattr(member, "leaf_skammstofun", None),
+                "count": count or 0,
+                "avg_words": avg_w or 0,
+                "avg_wpm": avg_wpm or 0,
+                "sum_words": sum_w or 0,
+            })
+        member_stats.sort(key=lambda m: icelandic_sort_key(m["name"]))
+
+        def top_by(key: str, reverse: bool = True) -> List[Dict[str, Any]]:
+            return sorted(member_stats, key=lambda m: (m.get(key) or 0, icelandic_sort_key(m["name"])), reverse=reverse)[:5]
+
+        stats = {
+            "longest": [speech_item(s) for s in longest],
+            "shortest": [speech_item(s) for s in shortest],
+            "fastest": [speech_item(s) for s in fastest],
+            "slowest": [speech_item(s) for s in slowest],
+            "avg_length": top_by("avg_words"),
+            "avg_speed": top_by("avg_wpm"),
+            "most_speeches": top_by("count"),
+            "fewest_speeches": top_by("count", reverse=False),
+        }
+
+        member_id = request.args.get("member_id", type=int)
+        member_focus = None
+        if member_id:
+            speech_rows = session.execute(
+                select(Speech).where(*(filters + [Speech.member_id == member_id]))
+                .order_by(Speech.start_time.desc())
+                .limit(50)
+            ).scalars().all()
+            if speech_rows:
+                total_w = sum(getattr(s, "word_count", 0) or 0 for s in speech_rows)
+                wpm_vals = [getattr(s, "words_per_minute", None) for s in speech_rows if getattr(s, "words_per_minute", None) is not None]
+                member_focus = {
+                    "member": member_map.get(int(member_id)),
+                    "member_id": member_id,
+                    "count": len(speech_rows),
+                    "avg_words": (total_w / len(speech_rows)) if speech_rows else None,
+                    "avg_wpm": (sum(wpm_vals) / len(wpm_vals)) if wpm_vals else None,
+                    "speeches": [speech_item(s) for s in speech_rows],
+                }
+
+        member_options = [
+            {"member_id": m["member_id"], "name": m["name"], "party": m["party"], "count": m["count"]}
+            for m in member_stats
+        ]
+
+    summary = {
+        "total": total_speeches,
+        "total_speakers": total_speakers,
+        "avg_words": avg_words,
+        "avg_wpm": avg_wpm_all,
+    }
+    return render_template(
+        "speeches.html",
+        current_lthing=lthing,
+        summary=summary,
+        stats=stats,
+        member_focus=member_focus,
+        member_options=member_options,
+        error=None,
+    )
 
 
 @bp.route("/votes/report")
