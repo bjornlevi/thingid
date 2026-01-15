@@ -44,6 +44,16 @@ a:hover { text-decoration: underline; }
 nav a { margin-left: 1rem; padding: 0.45rem 0.75rem; border-radius: 999px; border: 1px solid var(--border); color: var(--text); }
 nav a:hover { border-color: var(--accent); }
 
+.session-select { display: flex; align-items: center; gap: 0.5rem; }
+.session-select label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.12em; }
+.session-select select {
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 0.4rem 0.75rem;
+}
+
 main { max-width: 1200px; margin: 0 auto; }
 
 .hero { padding: 1rem 0 0.5rem; }

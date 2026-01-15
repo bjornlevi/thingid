@@ -52,6 +52,7 @@ def _norm_tag(tag: str) -> str:
     return cleaned.lower()
 
 BASE_CURRENT = "https://www.althingi.is/altext/xml/loggjafarthing/yfirstandandi/"
+BASE_ALL = "https://www.althingi.is/altext/xml/loggjafarthing/"
 
 
 # -----------------------------
@@ -210,14 +211,36 @@ def iter_records(root: ET.Element, record_path: str) -> List[ET.Element]:
         return [e for e in list(cont) if strip_ns(e.tag) == item_tag]
     return []
 
-def discover_current_lthing_and_yfirlit(fetcher: Fetcher) -> Tuple[int, Dict[str, str]]:
-    # Minimal parse: choose max <þing númer="..."> like in check_data
-    root = parse_xml(fetcher.get(BASE_CURRENT), BASE_CURRENT)
-
+def _parse_sessions(root: ET.Element) -> List[ET.Element]:
     sessions = []
     for e in root.iter():
         if strip_ns(e.tag) == "þing" and e.attrib:
             sessions.append(e)
+    return sessions
+
+
+def _extract_yfirlit(node: ET.Element, base_url: str) -> Dict[str, str]:
+    yf = None
+    for c in list(node):
+        if strip_ns(c.tag) == "yfirlit":
+            yf = c
+            break
+    if yf is None:
+        return {}
+    urls = {}
+    for c in list(yf):
+        name = strip_ns(c.tag)
+        u = (c.text or "").strip()
+        if u:
+            urls[name] = norm_url(base_url, u)
+    return urls
+
+
+def discover_current_lthing_and_yfirlit(fetcher: Fetcher) -> Tuple[int, Dict[str, str]]:
+    # Minimal parse: choose max <þing númer="..."> like in check_data
+    root = parse_xml(fetcher.get(BASE_CURRENT), BASE_CURRENT)
+
+    sessions = _parse_sessions(root)
     if not sessions:
         raise RuntimeError("No <þing> found in yfirstandandi")
 
@@ -234,22 +257,44 @@ def discover_current_lthing_and_yfirlit(fetcher: Fetcher) -> Tuple[int, Dict[str
     if best is None:
         raise RuntimeError("Could not determine current session number")
 
-    yf = None
-    for c in list(best):
-        if strip_ns(c.tag) == "yfirlit":
-            yf = c
-            break
-    if yf is None:
+    urls = _extract_yfirlit(best, BASE_CURRENT)
+    if not urls:
         raise RuntimeError("No <yfirlit> under chosen <þing>")
 
-    urls = {}
-    for c in list(yf):
-        name = strip_ns(c.tag)
-        u = (c.text or "").strip()
-        if u:
-            urls[name] = norm_url(BASE_CURRENT, u)
-
     return best_n, urls
+
+
+def discover_lthing_and_yfirlit(fetcher: Fetcher, lthing: int) -> Tuple[int, Dict[str, str]]:
+    root = parse_xml(fetcher.get(BASE_ALL), BASE_ALL)
+    sessions = _parse_sessions(root)
+    if not sessions:
+        raise RuntimeError("No <þing> found in loggjafarthing")
+    for s in sessions:
+        n = s.attrib.get("númer") or s.attrib.get("numer") or s.attrib.get("nr")
+        try:
+            ni = int(str(n))
+        except Exception:
+            continue
+        if ni == lthing:
+            urls = _extract_yfirlit(s, BASE_ALL)
+            return lthing, urls
+    raise RuntimeError(f"Could not find lthing {lthing} in loggjafarthing")
+
+
+def list_lthing_sessions(fetcher: Fetcher) -> List[Tuple[int, Dict[str, str]]]:
+    root = parse_xml(fetcher.get(BASE_ALL), BASE_ALL)
+    sessions = _parse_sessions(root)
+    out = []
+    for s in sessions:
+        n = s.attrib.get("númer") or s.attrib.get("numer") or s.attrib.get("nr")
+        try:
+            ni = int(str(n))
+        except Exception:
+            continue
+        urls = _extract_yfirlit(s, BASE_ALL)
+        out.append((ni, urls))
+    out.sort(key=lambda x: x[0])
+    return out
 
 
 def unique_constraint_columns(model: Any) -> List[List[str]]:
@@ -1039,6 +1084,8 @@ def main() -> int:
     ap.add_argument("--force-fetch", action="store_true", help="Ignore cache and re-download all resources")
     ap.add_argument("--speeches-only", action="store_true", help="Only refresh raedur (skip other resources; keeps existing DB)")
     ap.add_argument("--skip-speeches", action="store_true", help="Skip fetching individual raedur XML documents")
+    ap.add_argument("--lthing", type=int, default=None, help="Fetch a specific löggjafarþing number")
+    ap.add_argument("--all-lthing", action="store_true", help="Fetch all löggjafarþing sessions (uses existing DB)")
     args = ap.parse_args()
 
     # Load schema map
@@ -1052,6 +1099,8 @@ def main() -> int:
             raise RuntimeError("schema_map is missing raedulisti resource required for --speeches-only")
 
     if args.speeches_only:
+        args.reset_db = False
+    if args.all_lthing:
         args.reset_db = False
 
     # Ensure DB directory exists and reset if requested
@@ -1081,8 +1130,31 @@ def main() -> int:
 
     fetcher = Fetcher(sleep_s=args.sleep, cache_dir=args.cache_dir, force=args.force_fetch)
     detail_cache: Dict[str, List[Tuple[int, str]]] = {}
-    lthing, yfirlit = discover_current_lthing_and_yfirlit(fetcher)
     fetched_at = now_utc_iso()
+
+    def resource_urls_for_lthing(base_resources: List[Dict[str, Any]], lthing_val: int, yfirlit_urls: Dict[str, str]) -> List[Dict[str, Any]]:
+        out = []
+        for r in base_resources:
+            rcopy = dict(r)
+            name = rcopy.get("name")
+            if name and name in yfirlit_urls:
+                rcopy["url"] = yfirlit_urls[name]
+            else:
+                url = rcopy.get("url", "")
+                if "lthing=" in url:
+                    rcopy["url"] = re.sub(r"(lthing=)\\d+", rf"\\g<1>{lthing_val}", url)
+            out.append(rcopy)
+        return out
+
+    if args.all_lthing:
+        sessions = list_lthing_sessions(fetcher)
+        targets = [(n, y) for n, y in sessions if y]
+    elif args.lthing is not None:
+        lt, y = discover_lthing_and_yfirlit(fetcher, args.lthing)
+        targets = [(lt, y)]
+    else:
+        lt, y = discover_current_lthing_and_yfirlit(fetcher)
+        targets = [(lt, y)]
 
     # Build a lookup of tablename -> ModelClass
     model_by_table: Dict[str, Any] = {}
@@ -1096,357 +1168,366 @@ def main() -> int:
         issue_documents: List[Any] = []
         vote_details_to_add: List[Any] = []
         seats_to_add: List[Any] = []
-        for r in resources:
-            if "error" in r:
-                continue
-            name = r["name"]
-            url = r["url"]
-            table = r["table"]
-            record_path = r["record_path"]
-
-            Model = model_by_table.get(table)
-            if Model is None:
-                raise RuntimeError(f"Model for table '{table}' not found. Re-run check_data.py?")
-
-            # Fetch resource XML
-            xb = fetcher.get(url)
-            root = parse_xml(xb, url)
-            records = iter_records(root, record_path)
-            if args.max_records is not None:
-                records = records[:args.max_records]
-
-            # Refresh this resource for this session
-            session.execute(text(f'DELETE FROM "{table}" WHERE ingest_lthing=:lt AND ingest_resource=:res'),
-                            {"lt": lthing, "res": name})
-
-            # Also clear child tables
-            for ct in r.get("child_tables", []):
-                ctable = ct["table"]
-                session.execute(text(f'DELETE FROM "{ctable}" WHERE ingest_lthing=:lt AND ingest_resource=:res'),
-                                {"lt": lthing, "res": name})
-
-            session.flush()
-
-            attr_map: Dict[str, str] = r["attr_map"]
-            leaf_map: Dict[str, str] = r["leaf_map"]
-            repeated_paths: set[str] = set(r.get("repeated_leaf_paths", []))
-
-            child_by_path: Dict[str, str] = {ct["path"]: ct["table"] for ct in r.get("child_tables", [])}
-            child_models: Dict[str, Any] = {ct["table"]: model_by_table[ct["table"]] for ct in r.get("child_tables", [])}
-            unique_constraints = unique_constraint_columns(Model)
-            seen_unique: List[set] = [set() for _ in unique_constraints]
-
-            parents: List[Any] = []
-            children_to_add: List[Any] = []
-            skipped_dupes = 0
-
-            for rec in records:
-                row: Dict[str, Any] = {}
-                row["ingest_lthing"] = lthing
-                row["ingest_resource"] = name
-                row["source_url"] = url
-                row["fetched_at"] = fetched_at
-                row["raw_xml"] = ET.tostring(rec, encoding="unicode")
-
-                # attributes
-                for k, col in attr_map.items():
-                    if k in rec.attrib:
-                        row[col] = rec.attrib.get(k)
-
-                # leaf fields
-                leafs = iter_leaf_fields(rec)
-                # group leaf values per path
-                per_path: Dict[str, List[str]] = {}
-                for p, v in leafs:
-                    per_path.setdefault(p, []).append(v)
-
-                # scalar leaves -> first value
-                for p, col in leaf_map.items():
-                    vals = per_path.get(p)
-                    if vals:
-                        row[col] = vals[0]
-
-                # Resource-specific enrichment: fetch flutningsmenn from detailed thingskjal XML
-                if name == "þingskjalalisti":
-                    detail_url = row.get("leaf_slod_xml")
-                    if detail_url:
-                        if detail_url not in detail_cache:
-                            try:
-                                detail_xml = parse_xml(fetcher.get(detail_url), detail_url)
-                                detail_cache[detail_url] = parse_flutningsmenn(detail_xml)
-                            except Exception:
-                                detail_cache[detail_url] = []
-                        fms = detail_cache.get(detail_url) or []
-                        if fms:
-                            row["leaf_kalladaftur"] = json.dumps(fms, ensure_ascii=False)
-
-                # Drop duplicates within this batch based on UniqueConstraints (if any)
-                is_duplicate = False
-                for idx, cols in enumerate(unique_constraints):
-                    key = tuple(row.get(c) for c in cols)
-                    if any(v is None for v in key):
-                        continue
-                    if key in seen_unique[idx]:
-                        is_duplicate = True
-                        break
-                    seen_unique[idx].add(key)
-                if is_duplicate:
-                    skipped_dupes += 1
+        for lthing, yfirlit in targets:
+            scoped_resources = resource_urls_for_lthing(resources, lthing, yfirlit)
+            for r in scoped_resources:
+                if "error" in r:
                     continue
-
-                parent = Model(**_filter_model_kwargs(Model, row))
-                parents.append(parent)
-                session.add(parent)
-
-                # repeated leaves -> child tables
-                for p in repeated_paths:
-                    vals = per_path.get(p) or []
-                    if not vals:
-                        continue
-                    ctable = child_by_path.get(p)
-                    if not ctable:
-                        continue
-                    ChildModel = child_models[ctable]
-                    # parent.id available after flush; do later
-                    # store temporary tuple
-                    children_to_add.append((parent, ChildModel, vals, url, fetched_at, lthing, name))
-
-            session.flush()
-
-            # Now insert child rows (needs parent.id)
-            for (parent, ChildModel, vals, url, fetched_at, lt, resname) in children_to_add:
-                for i, v in enumerate(vals, start=1):
-                    session.add(ChildModel(
-                        parent_id=parent.id,
-                        seq=i,
-                        value=v,
-                        ingest_lthing=lt,
-                        ingest_resource=resname,
-                        source_url=url,
-                        fetched_at=fetched_at
-                    ))
-
-            session.flush()
-            # Extra: fetch and store per-voter breakdown for atkvæðagreiðslur
-            if name == "atkvæðagreiðslur" and manual_models and hasattr(manual_models, "VoteDetail"):
-                VoteDetail = manual_models.VoteDetail
-                # clear existing for this lthing
-                session.execute(text('DELETE FROM vote_details WHERE lthing=:lt'), {"lt": lthing})
+                name = r["name"]
+                url = r["url"]
+                table = r["table"]
+                record_path = r["record_path"]
+    
+                Model = model_by_table.get(table)
+                if Model is None:
+                    raise RuntimeError(f"Model for table '{table}' not found. Re-run check_data.py?")
+    
+                # Fetch resource XML
+                xb = fetcher.get(url)
+                root = parse_xml(xb, url)
+                records = iter_records(root, record_path)
+                if args.max_records is not None:
+                    records = records[:args.max_records]
+    
+                # Refresh this resource for this session
+                session.execute(text(f'DELETE FROM "{table}" WHERE ingest_lthing=:lt AND ingest_resource=:res'),
+                                {"lt": lthing, "res": name})
+    
+                # Also clear child tables
+                for ct in r.get("child_tables", []):
+                    ctable = ct["table"]
+                    session.execute(text(f'DELETE FROM "{ctable}" WHERE ingest_lthing=:lt AND ingest_resource=:res'),
+                                    {"lt": lthing, "res": name})
+    
                 session.flush()
-                # attr map name for vote number
-                vote_num_col = attr_map.get("atkvæðagreiðslunúmer")
-                nanar_col = leaf_map.get("nánar/xml") or leaf_map.get("nánar")
-                ja_col = leaf_map.get("samantekt/já/fjöldi")
-                nei_col = leaf_map.get("samantekt/nei/fjöldi")
-                greidirekki_col = leaf_map.get("samantekt/greiðirekkiatkvæði/fjöldi")
-                afgreidsla_col = leaf_map.get("samantekt/afgreiðsla")
-                for parent in parents:
-                    detail_url = getattr(parent, nanar_col, None) if nanar_col else None
-                    vote_num = getattr(parent, vote_num_col, None) if vote_num_col else None
-                    if not detail_url or vote_num is None:
+    
+                attr_map: Dict[str, str] = r["attr_map"]
+                leaf_map: Dict[str, str] = r["leaf_map"]
+                repeated_paths: set[str] = set(r.get("repeated_leaf_paths", []))
+    
+                child_by_path: Dict[str, str] = {ct["path"]: ct["table"] for ct in r.get("child_tables", [])}
+                child_models: Dict[str, Any] = {ct["table"]: model_by_table[ct["table"]] for ct in r.get("child_tables", [])}
+                unique_constraints = unique_constraint_columns(Model)
+                seen_unique: List[set] = [set() for _ in unique_constraints]
+    
+                parents: List[Any] = []
+                children_to_add: List[Any] = []
+                skipped_dupes = 0
+    
+                for rec in records:
+                    row: Dict[str, Any] = {}
+                    row["ingest_lthing"] = lthing
+                    row["ingest_resource"] = name
+                    row["source_url"] = url
+                    row["fetched_at"] = fetched_at
+                    row["raw_xml"] = ET.tostring(rec, encoding="unicode")
+    
+                    # attributes
+                    for k, col in attr_map.items():
+                        if k in rec.attrib:
+                            row[col] = rec.attrib.get(k)
+    
+                    # leaf fields
+                    leafs = iter_leaf_fields(rec)
+                    # group leaf values per path
+                    per_path: Dict[str, List[str]] = {}
+                    for p, v in leafs:
+                        per_path.setdefault(p, []).append(v)
+    
+                    # scalar leaves -> first value
+                    for p, col in leaf_map.items():
+                        vals = per_path.get(p)
+                        if vals:
+                            row[col] = vals[0]
+    
+                    # Resource-specific enrichment: fetch flutningsmenn from detailed thingskjal XML
+                    if name == "þingskjalalisti":
+                        detail_url = row.get("leaf_slod_xml")
+                        if detail_url:
+                            if detail_url not in detail_cache:
+                                try:
+                                    detail_xml = parse_xml(fetcher.get(detail_url), detail_url)
+                                    detail_cache[detail_url] = parse_flutningsmenn(detail_xml)
+                                except Exception:
+                                    detail_cache[detail_url] = []
+                            fms = detail_cache.get(detail_url) or []
+                            if fms:
+                                row["leaf_kalladaftur"] = json.dumps(fms, ensure_ascii=False)
+    
+                    # Drop duplicates within this batch based on UniqueConstraints (if any)
+                    is_duplicate = False
+                    for idx, cols in enumerate(unique_constraints):
+                        key = tuple(row.get(c) for c in cols)
+                        if any(v is None for v in key):
+                            continue
+                        if key in seen_unique[idx]:
+                            is_duplicate = True
+                            break
+                        seen_unique[idx].add(key)
+                    if is_duplicate:
+                        skipped_dupes += 1
                         continue
-                    try:
-                        vxml = parse_xml(fetcher.get(detail_url), detail_url)
-                        summary_counts, voter_rows = parse_vote_details(vxml)
-                        # update parent summary fields
-                        if ja_col:
-                            setattr(parent, ja_col, summary_counts.get("ja"))
-                        if nei_col:
-                            setattr(parent, nei_col, summary_counts.get("nei"))
-                        if greidirekki_col:
-                            setattr(parent, greidirekki_col, summary_counts.get("greidirekki"))
-                        if afgreidsla_col:
-                            setattr(parent, afgreidsla_col, summary_counts.get("afgreidsla"))
-                        for vr in voter_rows:
-                            vote_details_to_add.append(VoteDetail(
-                                lthing=lthing,
-                                vote_num=vote_num,
-                                parent_id=parent.id,
-                                voter_id=vr.get("voter_id"),
-                                voter_name=vr.get("voter_name"),
-                                voter_xml=vr.get("voter_xml"),
-                                vote=vr.get("vote"),
-                            ))
-                    except Exception as e:
-                        print(f"[warn] failed to fetch vote breakdown for {vote_num}: {e}")
-
-            # Extra: fetch and store member seats (party/type) for þingmenn
-            if name == "þingmannalisti" and manual_models and hasattr(manual_models, "MemberSeat"):
-                MemberSeat = manual_models.MemberSeat
-                session.execute(text('DELETE FROM member_seat WHERE lthing=:lt'), {"lt": lthing})
+    
+                    parent = Model(**_filter_model_kwargs(Model, row))
+                    parents.append(parent)
+                    session.add(parent)
+    
+                    # repeated leaves -> child tables
+                    for p in repeated_paths:
+                        vals = per_path.get(p) or []
+                        if not vals:
+                            continue
+                        ctable = child_by_path.get(p)
+                        if not ctable:
+                            continue
+                        ChildModel = child_models[ctable]
+                        # parent.id available after flush; do later
+                        # store temporary tuple
+                        children_to_add.append((parent, ChildModel, vals, url, fetched_at, lthing, name))
+    
                 session.flush()
-                thingseta_col = leaf_map.get("xml/þingseta")
-                for parent in parents:
-                    thingseta_url = getattr(parent, thingseta_col, None) if thingseta_col else None
-                    member_id = getattr(parent, attr_map.get("id"), None)
-                    if not thingseta_url or member_id is None:
-                        continue
-                    try:
-                        ts_xml = parse_xml(fetcher.get(thingseta_url), thingseta_url)
-                        seats = parse_member_seats(ts_xml, lthing)
-                        seen_keys = set()
-                        for s in seats:
-                            key = (member_id, s.get("party_id"), s.get("inn") or "")
-                            if key in seen_keys:
-                                continue
-                            seen_keys.add(key)
-                            seats_to_add.append(MemberSeat(
-                                lthing=lthing,
-                                member_id=member_id,
-                                party_id=s.get("party_id"),
-                                party_name=s.get("party"),
-                                type=s.get("type"),
-                                kjordaemi_id=s.get("kjordaemi_id"),
-                                kjordaemi_name=s.get("kjordaemi"),
-                                inn=s.get("inn"),
-                                ut=s.get("ut"),
-                            ))
-                    except Exception as e:
-                        print(f"[warn] failed to fetch þingseta for member {member_id}: {e}")
-
-            # Extra: fetch nefndarmenn for each nefnd
-            if name == "nefndir" and manual_models and hasattr(manual_models, "NefndMember"):
-                NefndMember = manual_models.NefndMember
-                session.execute(text('DELETE FROM nefnd_member WHERE lthing=:lt'), {"lt": lthing})
+    
+                # Now insert child rows (needs parent.id)
+                for (parent, ChildModel, vals, url, fetched_at, lt, resname) in children_to_add:
+                    for i, v in enumerate(vals, start=1):
+                        session.add(ChildModel(
+                            parent_id=parent.id,
+                            seq=i,
+                            value=v,
+                            ingest_lthing=lt,
+                            ingest_resource=resname,
+                            source_url=url,
+                            fetched_at=fetched_at
+                        ))
+    
                 session.flush()
-                nefndarmenn_url = None
-                if parents and leaf_map:
-                    candidate = getattr(parents[0], leaf_map.get("nefndarmenn"), None)
-                    if candidate:
-                        nefndarmenn_url = candidate
-                if nefndarmenn_url and "nnefnd=" in nefndarmenn_url:
-                    nefndarmenn_url = nefndarmenn_url.replace("nnefnd=", "nefnd=")
-                if nefndarmenn_url:
-                    nefndarmenn_url = norm_url(url, nefndarmenn_url)
-                if not nefndarmenn_url:
-                    print("[warn] no nefndarmenn url found")
-                else:
-                    try:
-                        xml_root = parse_xml(fetcher.get(nefndarmenn_url), nefndarmenn_url)
-                        parsed_map = parse_nefndarmenn_all(xml_root, lthing)
-                        nefnd_rows = []
-                        seen_nm_keys: set[Tuple[int, int, Optional[int], Optional[str], Optional[str]]] = set()
-                        for parent in parents:
-                            nefnd_id = getattr(parent, r["attr_map"].get("id"), None) if r.get("attr_map") else None
-                            try:
-                                nefnd_id_int = int(nefnd_id) if nefnd_id is not None else None
-                            except Exception:
-                                nefnd_id_int = None
-                            if nefnd_id_int is None:
-                                continue
-                            entries = parsed_map.get(nefnd_id_int, [])
-                            if entries:
-                                for p in entries:
-                                    key = (lthing, nefnd_id_int, p.get("member_id"), p.get("name"), p.get("inn"))
-                                    if key in seen_nm_keys:
-                                        continue
-                                    seen_nm_keys.add(key)
-                                    nefnd_rows.append(NefndMember(**p))
-                                print(f"[ok] nefnd {nefnd_id_int}: stored {len(entries)} nefndarmenn")
-                        if nefnd_rows:
-                            session.add_all(nefnd_rows)
-                            session.commit()
-                    except Exception as e:
-                        print(f"[warn] failed to fetch aggregated nefndarmenn: {e}")
-
-            session.commit()
-            inserted = len(records) - skipped_dupes
-            print(f"[ok] {name}: inserted {inserted} rows into {table} ({skipped_dupes} skipped as duplicates)")
-            # If we just processed þingmálalisti, collect issue documents from detail XMLs
-            if name == "þingmálalisti" and manual_models and hasattr(manual_models, "IssueDocument"):
-                issue_documents = []
-                IssueDocModel = manual_models.IssueDocument
-                # clear previous for this lthing
-                session.execute(text('DELETE FROM issue_documents WHERE lthing=:lt'), {"lt": lthing})
-                session.flush()
-                for parent in parents:
-                    detail_url = getattr(parent, r["leaf_map"].get("xml"), None) if r.get("leaf_map") else None
-                    malnr = getattr(parent, r["attr_map"].get("málsnúmer"), None) if r.get("attr_map") else None
-                    if not detail_url or malnr is None:
-                        continue
-                    try:
-                        detail_xml = parse_xml(fetcher.get(detail_url), detail_url)
-                        docs = parse_issue_documents(detail_xml, getattr(parent, r["attr_map"].get("málsflokkur"), None) if r.get("attr_map") else None)
-                        for d in docs:
-                            issue_documents.append(IssueDocModel(
-                                lthing=lthing,
-                                malnr=malnr,
-                                malflokkur=d.get("malflokkur"),
-                                skjalnr=d.get("skjalnr"),
-                                skjalategund=d.get("skjalategund"),
-                                utbyting=d.get("utbyting"),
-                                slod_html=d.get("slod_html"),
-                                slod_pdf=d.get("slod_pdf"),
-                                slod_xml=d.get("slod_xml"),
-                            ))
-                    except Exception as e:
-                        print(f"[warn] failed to fetch þingskjöl for mál {malnr}: {e}")
-                if issue_documents:
-                    session.add_all(issue_documents)
+                # Extra: fetch and store per-voter breakdown for atkvæðagreiðslur
+                if name == "atkvæðagreiðslur" and manual_models and hasattr(manual_models, "VoteDetail"):
+                    VoteDetail = manual_models.VoteDetail
+                    # clear existing for this lthing
+                    session.execute(text('DELETE FROM vote_details WHERE lthing=:lt'), {"lt": lthing})
+                    session.flush()
+                    # attr map name for vote number
+                    vote_num_col = attr_map.get("atkvæðagreiðslunúmer")
+                    nanar_col = leaf_map.get("nánar/xml") or leaf_map.get("nánar")
+                    ja_col = leaf_map.get("samantekt/já/fjöldi")
+                    nei_col = leaf_map.get("samantekt/nei/fjöldi")
+                    greidirekki_col = leaf_map.get("samantekt/greiðirekkiatkvæði/fjöldi")
+                    afgreidsla_col = leaf_map.get("samantekt/afgreiðsla")
+                    for parent in parents:
+                        detail_url = getattr(parent, nanar_col, None) if nanar_col else None
+                        vote_num = getattr(parent, vote_num_col, None) if vote_num_col else None
+                        if not detail_url or vote_num is None:
+                            continue
+                        try:
+                            vxml = parse_xml(fetcher.get(detail_url), detail_url)
+                            summary_counts, voter_rows = parse_vote_details(vxml)
+                            # update parent summary fields
+                            if ja_col:
+                                setattr(parent, ja_col, summary_counts.get("ja"))
+                            if nei_col:
+                                setattr(parent, nei_col, summary_counts.get("nei"))
+                            if greidirekki_col:
+                                setattr(parent, greidirekki_col, summary_counts.get("greidirekki"))
+                            if afgreidsla_col:
+                                setattr(parent, afgreidsla_col, summary_counts.get("afgreidsla"))
+                            for vr in voter_rows:
+                                vote_details_to_add.append(VoteDetail(
+                                    lthing=lthing,
+                                    vote_num=vote_num,
+                                    parent_id=parent.id,
+                                    voter_id=vr.get("voter_id"),
+                                    voter_name=vr.get("voter_name"),
+                                    voter_xml=vr.get("voter_xml"),
+                                    vote=vr.get("vote"),
+                                ))
+                        except Exception as e:
+                            print(f"[warn] failed to fetch vote breakdown for {vote_num}: {e}")
+    
+                # Extra: fetch and store member seats (party/type) for þingmenn
+                if name == "þingmannalisti" and manual_models and hasattr(manual_models, "MemberSeat"):
+                    MemberSeat = manual_models.MemberSeat
+                    session.execute(text('DELETE FROM member_seat WHERE lthing=:lt'), {"lt": lthing})
+                    session.flush()
+                    thingseta_col = leaf_map.get("xml/þingseta")
+                    for parent in parents:
+                        thingseta_url = getattr(parent, thingseta_col, None) if thingseta_col else None
+                        member_id = getattr(parent, attr_map.get("id"), None)
+                        if not thingseta_url or member_id is None:
+                            continue
+                        try:
+                            ts_xml = parse_xml(fetcher.get(thingseta_url), thingseta_url)
+                            seats = parse_member_seats(ts_xml, lthing)
+                            seen_keys = set()
+                            for s in seats:
+                                key = (member_id, s.get("party_id"), s.get("inn") or "")
+                                if key in seen_keys:
+                                    continue
+                                seen_keys.add(key)
+                                seats_to_add.append(MemberSeat(
+                                    lthing=lthing,
+                                    member_id=member_id,
+                                    party_id=s.get("party_id"),
+                                    party_name=s.get("party"),
+                                    type=s.get("type"),
+                                    kjordaemi_id=s.get("kjordaemi_id"),
+                                    kjordaemi_name=s.get("kjordaemi"),
+                                    inn=s.get("inn"),
+                                    ut=s.get("ut"),
+                                ))
+                        except Exception as e:
+                            print(f"[warn] failed to fetch þingseta for member {member_id}: {e}")
+    
+                # Extra: fetch nefndarmenn for each nefnd
+                if name == "nefndir" and manual_models and hasattr(manual_models, "NefndMember"):
+                    NefndMember = manual_models.NefndMember
+                    session.execute(text('DELETE FROM nefnd_member WHERE lthing=:lt'), {"lt": lthing})
+                    session.flush()
+                    nefndarmenn_url = None
+                    if parents and leaf_map:
+                        candidate = getattr(parents[0], leaf_map.get("nefndarmenn"), None)
+                        if candidate:
+                            nefndarmenn_url = candidate
+                    if nefndarmenn_url and "nnefnd=" in nefndarmenn_url:
+                        nefndarmenn_url = nefndarmenn_url.replace("nnefnd=", "nefnd=")
+                    if nefndarmenn_url:
+                        nefndarmenn_url = norm_url(url, nefndarmenn_url)
+                    if not nefndarmenn_url:
+                        print("[warn] no nefndarmenn url found")
+                    else:
+                        try:
+                            xml_root = parse_xml(fetcher.get(nefndarmenn_url), nefndarmenn_url)
+                            parsed_map = parse_nefndarmenn_all(xml_root, lthing)
+                            nefnd_rows = []
+                            seen_nm_keys: set[Tuple[int, int, Optional[int], Optional[str], Optional[str]]] = set()
+                            for parent in parents:
+                                nefnd_id = getattr(parent, r["attr_map"].get("id"), None) if r.get("attr_map") else None
+                                try:
+                                    nefnd_id_int = int(nefnd_id) if nefnd_id is not None else None
+                                except Exception:
+                                    nefnd_id_int = None
+                                if nefnd_id_int is None:
+                                    continue
+                                entries = parsed_map.get(nefnd_id_int, [])
+                                if entries:
+                                    for p in entries:
+                                        key = (lthing, nefnd_id_int, p.get("member_id"), p.get("name"), p.get("inn"))
+                                        if key in seen_nm_keys:
+                                            continue
+                                        seen_nm_keys.add(key)
+                                        nefnd_rows.append(NefndMember(**p))
+                                    print(f"[ok] nefnd {nefnd_id_int}: stored {len(entries)} nefndarmenn")
+                            if nefnd_rows:
+                                session.add_all(nefnd_rows)
+                                session.commit()
+                        except Exception as e:
+                            print(f"[warn] failed to fetch aggregated nefndarmenn: {e}")
+    
+                session.commit()
+                inserted = len(records) - skipped_dupes
+                print(f"[ok] {name}: inserted {inserted} rows into {table} ({skipped_dupes} skipped as duplicates)")
+                # If we just processed þingmálalisti, collect issue documents from detail XMLs
+                if name == "þingmálalisti" and manual_models and hasattr(manual_models, "IssueDocument"):
+                    issue_documents = []
+                    IssueDocModel = manual_models.IssueDocument
+                    # clear previous for this lthing
+                    session.execute(text('DELETE FROM issue_documents WHERE lthing=:lt'), {"lt": lthing})
+                    session.flush()
+                    for parent in parents:
+                        detail_url = getattr(parent, r["leaf_map"].get("xml"), None) if r.get("leaf_map") else None
+                        malnr = getattr(parent, r["attr_map"].get("málsnúmer"), None) if r.get("attr_map") else None
+                        if not detail_url or malnr is None:
+                            continue
+                        try:
+                            detail_xml = parse_xml(fetcher.get(detail_url), detail_url)
+                            docs = parse_issue_documents(detail_xml, getattr(parent, r["attr_map"].get("málsflokkur"), None) if r.get("attr_map") else None)
+                            for d in docs:
+                                issue_documents.append(IssueDocModel(
+                                    lthing=lthing,
+                                    malnr=malnr,
+                                    malflokkur=d.get("malflokkur"),
+                                    skjalnr=d.get("skjalnr"),
+                                    skjalategund=d.get("skjalategund"),
+                                    utbyting=d.get("utbyting"),
+                                    slod_html=d.get("slod_html"),
+                                    slod_pdf=d.get("slod_pdf"),
+                                    slod_xml=d.get("slod_xml"),
+                                ))
+                        except Exception as e:
+                            print(f"[warn] failed to fetch þingskjöl for mál {malnr}: {e}")
+                    if issue_documents:
+                        session.add_all(issue_documents)
+                        session.commit()
+                        print(f"[ok] þingmálalisti: stored {len(issue_documents)} issue_documents")
+                if name == "atkvæðagreiðslur" and vote_details_to_add:
+                    session.add_all(vote_details_to_add)
                     session.commit()
-                    print(f"[ok] þingmálalisti: stored {len(issue_documents)} issue_documents")
-            if name == "atkvæðagreiðslur" and vote_details_to_add:
-                session.add_all(vote_details_to_add)
-                session.commit()
-                print(f"[ok] atkvæðagreiðslur: stored {len(vote_details_to_add)} vote_details")
-            if name == "þingmannalisti" and seats_to_add:
-                session.add_all(seats_to_add)
-                session.commit()
-                print(f"[ok] þingmannalisti: stored {len(seats_to_add)} member seats")
-
+                    print(f"[ok] atkvæðagreiðslur: stored {len(vote_details_to_add)} vote_details")
+                if name == "þingmannalisti" and seats_to_add:
+                    session.add_all(seats_to_add)
+                    session.commit()
+                    print(f"[ok] þingmannalisti: stored {len(seats_to_add)} member seats")
+    
     # Extra: cache nefndarfundir + fundargerðir for this þing to support attendance parsing
     if args.cache_dir and not args.speeches_only:
-        try:
-            cache_nefndarfundir(fetcher, lthing)
-        except Exception as e:
-            print(f"[warn] failed to cache nefndarfundir: {e}")
+        for lthing, _ in targets:
+            try:
+                cache_nefndarfundir(fetcher, lthing)
+            except Exception as e:
+                print(f"[warn] failed to cache nefndarfundir: {e}")
 
     # Aggregate vote sessions and committee attendance into manual tables
     if manual_models:
         with Session(engine) as session:
-            # map abbrev -> member_id
-            abbr_map = {}
-            if not args.speeches_only:
-                people = session.execute(select(models.ThingmannalistiThingmadur)).scalars().all()
-                for p in people:
-                    if p.attr_id is not None and p.leaf_skammstofun:
-                        abbr_map[_norm_tag(p.leaf_skammstofun)] = int(p.attr_id)
-                # derived issue metrics (answer status/latency) for written questions
-                if hasattr(manual_models, "IssueMetrics") and hasattr(manual_models, "IssueDocument"):
+            for lthing, _ in targets:
+                # map abbrev -> member_id
+                abbr_map = {}
+                if not args.speeches_only:
+                    people = session.execute(
+                        select(models.ThingmannalistiThingmadur).where(models.ThingmannalistiThingmadur.ingest_lthing == lthing)
+                    ).scalars().all()
+                    for p in people:
+                        if p.attr_id is not None and p.leaf_skammstofun:
+                            abbr_map[_norm_tag(p.leaf_skammstofun)] = int(p.attr_id)
+                    # derived issue metrics (answer status/latency) for written questions
+                    if hasattr(manual_models, "IssueMetrics") and hasattr(manual_models, "IssueDocument"):
+                        try:
+                            session.execute(text("DELETE FROM issue_metrics WHERE lthing=:lt"), {"lt": lthing})
+                            issue_rows = session.execute(
+                                select(models.ThingmalalistiMal).where(models.ThingmalalistiMal.ingest_lthing == lthing)
+                            ).scalars().all()
+                            issue_docs = session.execute(
+                                select(manual_models.IssueDocument).where(manual_models.IssueDocument.lthing == lthing)
+                            ).scalars().all()
+                            ath_map: Dict[int, str] = {}
+                            for nr, ath in session.execute(
+                                select(models.ThingskjalalistiThingskjal.attr_skjalsnumer, models.ThingskjalalistiThingskjal.leaf_athugasemd)
+                                .where(models.ThingskjalalistiThingskjal.ingest_lthing == lthing)
+                            ).all():
+                                if nr is None or not ath:
+                                    continue
+                                try:
+                                    ath_map[int(nr)] = ath
+                                except Exception:
+                                    continue
+                            metrics = compute_issue_metrics(lthing, issue_docs, issue_rows, ath_map, manual_models)
+                            if metrics:
+                                session.add_all(metrics)
+                            session.commit()
+                            print(f"[ok] issue_metrics: stored {len(metrics)} rows")
+                        except Exception as e:
+                            session.rollback()
+                            print(f"[warn] issue_metrics failed: {e}")
+                    # vote sessions
+                    populate_vote_sessions_and_attendance(session, lthing, manual_models)
+                    # committee attendance
+                    cache_dir = Path(args.cache_dir)
+                    populate_committee_attendance(session, cache_dir, lthing, abbr_map, manual_models)
+                if not args.skip_speeches:
                     try:
-                        session.execute(text("DELETE FROM issue_metrics WHERE lthing=:lt"), {"lt": lthing})
-                        issue_rows = session.execute(select(models.ThingmalalistiMal)).scalars().all()
-                        issue_docs = session.execute(
-                            select(manual_models.IssueDocument).where(manual_models.IssueDocument.lthing == lthing)
-                        ).scalars().all()
-                        ath_map: Dict[int, str] = {}
-                        for nr, ath in session.execute(
-                            select(models.ThingskjalalistiThingskjal.attr_skjalsnumer, models.ThingskjalalistiThingskjal.leaf_athugasemd)
-                        ).all():
-                            if nr is None or not ath:
-                                continue
-                            try:
-                                ath_map[int(nr)] = ath
-                            except Exception:
-                                continue
-                        metrics = compute_issue_metrics(lthing, issue_docs, issue_rows, ath_map, manual_models)
-                        if metrics:
-                            session.add_all(metrics)
-                        session.commit()
-                        print(f"[ok] issue_metrics: stored {len(metrics)} rows")
+                        populate_speeches(session, lthing, models, manual_models, fetcher, max_records=args.max_records)
                     except Exception as e:
-                        session.rollback()
-                        print(f"[warn] issue_metrics failed: {e}")
-                # vote sessions
-                populate_vote_sessions_and_attendance(session, lthing, manual_models)
-                # committee attendance
-                cache_dir = Path(args.cache_dir)
-                populate_committee_attendance(session, cache_dir, lthing, abbr_map, manual_models)
-            if not args.skip_speeches:
-                try:
-                    populate_speeches(session, lthing, models, manual_models, fetcher, max_records=args.max_records)
-                except Exception as e:
-                    print(f"[warn] populate_speeches failed: {e}")
+                        print(f"[warn] populate_speeches failed: {e}")
 
     print(f"Done. DB: {args.db}")
     return 0

@@ -3,6 +3,7 @@ OUTDIR ?= .
 MODELS_DIR ?= app
 DB ?= data/althingi.db
 SCHEMA ?= schema_map.json
+thing ?=
 FLASK_APP ?= wsgi.py
 FLASK_ENV ?= development
 APP_URL_PREFIX ?=
@@ -15,7 +16,13 @@ check_data:
 
 get_data:
 	@mkdir -p $(dir $(DB))
-	$(PYTHON) scripts/get_data.py --db $(DB) --schema $(SCHEMA) --models-dir $(MODELS_DIR)
+	@if [ "$(thing)" = "all" ]; then \
+		$(PYTHON) scripts/get_data.py --db $(DB) --schema $(SCHEMA) --models-dir $(MODELS_DIR) --all-lthing; \
+	elif [ -n "$(thing)" ]; then \
+		$(PYTHON) scripts/get_data.py --db $(DB) --schema $(SCHEMA) --models-dir $(MODELS_DIR) --lthing $(thing); \
+	else \
+		$(PYTHON) scripts/get_data.py --db $(DB) --schema $(SCHEMA) --models-dir $(MODELS_DIR); \
+	fi
 
 web:
 	FLASK_APP=$(FLASK_APP) FLASK_ENV=$(FLASK_ENV) APP_URL_PREFIX="$(APP_URL_PREFIX)" THINGID_PREFIX="$(THINGID_PREFIX)" $(PYTHON) -m flask run

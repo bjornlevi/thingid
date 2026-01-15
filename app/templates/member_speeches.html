@@ -5,16 +5,16 @@
         <p class="eyebrow">Ræður eftir þingmanni</p>
         <h1>
             {% if member %}
-                <a href="{{ url_for('main.member_detail', member_id=member_id) }}">{{ member.leaf_nafn }}</a>
+                <a href="{{ url_for('main.member_detail', member_id=member_id, **session_params) }}">{{ member.leaf_nafn }}</a>
             {% else %}
                 Þingmaður
             {% endif %}
         </h1>
         <p class="lede">Yfirlit yfir ræður á yfirstandandi löggjafarþingi.</p>
         <p>
-            <a href="{{ url_for('main.member_detail', member_id=member_id) }}">Til baka í þingmann</a>
+            <a href="{{ url_for('main.member_detail', member_id=member_id, **session_params) }}">Til baka í þingmann</a>
             ·
-            <a href="{{ url_for('main.speeches') }}">Til baka í þingræður</a>
+            <a href="{{ url_for('main.speeches', **session_params) }}">Til baka í þingræður</a>
         </p>
     </div>
     {% if summary %}

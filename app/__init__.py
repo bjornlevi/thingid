@@ -5,10 +5,14 @@ from pathlib import Path
 from typing import Optional
 
 from flask import Flask
+from flask import request
 from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .middleware import PrefixMiddleware
+from .views_helper import current_lthing as _current_lthing
+from .utils.sessions import load_sessions
 
 def _load_env_file(path: Path, *, override: bool = False) -> None:
     """
@@ -87,6 +91,25 @@ def create_app() -> Flask:
     # generate correct URLs when the proxy strips the mount prefix upstream.
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
     app.wsgi_app = PrefixMiddleware(app.wsgi_app, url_prefix)
+
+    @app.context_processor
+    def inject_sessions():
+        engine = app.config.get("ENGINE")
+        selected = request.args.get("lthing", type=int)
+        if not selected and engine is not None:
+            try:
+                with Session(engine) as session:
+                    selected = _current_lthing(session)
+            except Exception:
+                selected = None
+        sessions = load_sessions()
+        session_params = {"lthing": selected} if selected else {}
+        return {
+            "current_lthing": selected,
+            "selected_lthing": selected,
+            "sessions": sessions,
+            "session_params": session_params,
+        }
 
     from . import views  # noqa: WPS433
     views.register(app)

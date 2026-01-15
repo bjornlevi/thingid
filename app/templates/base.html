@@ -26,16 +26,45 @@
             </div>
         </div>
         <nav>
-            <a href="{{ url_for('main.index') }}">Þingmál</a>
-            <a href="{{ url_for('main.members') }}">Þingmenn</a>
-            <a href="{{ url_for('main.speeches') }}">Þingræður</a>
-            <a href="{{ url_for('main.committees') }}">Nefndir</a>
-            <a href="{{ url_for('main.agenda') }}">Dagskrá</a>
+            <a href="{{ url_for('main.index', **session_params) }}">Þingmál</a>
+            <a href="{{ url_for('main.members', **session_params) }}">Þingmenn</a>
+            <a href="{{ url_for('main.speeches', **session_params) }}">Þingræður</a>
+            <a href="{{ url_for('main.committees', **session_params) }}">Nefndir</a>
+            <a href="{{ url_for('main.agenda', **session_params) }}">Dagskrá</a>
         </nav>
+        {% if sessions %}
+            <div class="session-select">
+                <label for="session-select">Löggjafarþing</label>
+                <select id="session-select">
+                    {% for s in sessions %}
+                        <option value="{{ s.number }}" {% if selected_lthing == s.number %}selected{% endif %}>
+                            {{ s.number }}{% if s.period %} · {{ s.period }}{% endif %}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+        {% endif %}
     </header>
     <main>
         {% block content %}{% endblock %}
     </main>
     {% block scripts %}{% endblock %}
+    {% if sessions %}
+    <script>
+      (function () {
+        var select = document.getElementById("session-select");
+        if (!select) return;
+        select.addEventListener("change", function () {
+          var url = new URL(window.location.href);
+          if (select.value) {
+            url.searchParams.set("lthing", select.value);
+          } else {
+            url.searchParams.delete("lthing");
+          }
+          window.location.href = url.toString();
+        });
+      })();
+    </script>
+    {% endif %}
 </body>
 </html>

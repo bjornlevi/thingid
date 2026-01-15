@@ -15,7 +15,7 @@
         {% else %}
             <h1>Þingmaður</h1>
         {% endif %}
-        <p><a href="{{ url_for('main.members') }}">Til baka í þingmannalista</a></p>
+        <p><a href="{{ url_for('main.members', **session_params) }}">Til baka í þingmannalista</a></p>
     </div>
     {% if member and summary %}
         <div class="card">
@@ -65,8 +65,8 @@
                 </p>
             {% endif %}
             <div class="links">
-                <a class="pill link" href="{{ url_for('main.member_attendance', member_id=member.attr_id) }}">Mætingarskýrsla</a>
-                <a class="pill link" href="{{ url_for('main.member_speeches', member_id=member.attr_id) }}">Þingræður</a>
+                <a class="pill link" href="{{ url_for('main.member_attendance', member_id=member.attr_id, **session_params) }}">Mætingarskýrsla</a>
+                <a class="pill link" href="{{ url_for('main.member_speeches', member_id=member.attr_id, **session_params) }}">Þingræður</a>
             </div>
             {% if not member.is_pseudo %}
                 <div class="links">
@@ -93,7 +93,7 @@
                     {% for c in committees %}
                         <li>
                             {% if c.id %}
-                                <a href="{{ url_for('main.committees') }}#nefnd-{{ c.id }}">{{ c.name }}</a>
+                                <a href="{{ url_for('main.committees', **session_params) }}#nefnd-{{ c.id }}">{{ c.name }}</a>
                             {% else %}
                                 {{ c.name }}
                             {% endif %}

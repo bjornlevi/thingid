@@ -4,7 +4,7 @@
   <div>
     <p class="eyebrow">Mæting</p>
     {% if member %}
-      <h1><a href="{{ url_for('main.member_detail', member_id=member.attr_id) }}">{{ member.leaf_nafn }}</a></h1>
+      <h1><a href="{{ url_for('main.member_detail', member_id=member.attr_id, **session_params) }}">{{ member.leaf_nafn }}</a></h1>
       <p class="lede">Sundurliðun á mætingu fyrir {{ current_lthing }}. löggjafarþing.</p>
     {% else %}
       <h1>Mætingarskýrsla</h1>

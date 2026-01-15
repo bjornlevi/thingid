@@ -9,6 +9,9 @@
 </section>
 
 <section class="stack">
+  {% if error %}
+    <p class="text-danger">{{ error }}</p>
+  {% endif %}
   {% if items %}
     <ul class="list">
       {% for it in items %}
@@ -60,7 +63,7 @@
                       <div class="row speech-row">
                         <strong>
                           {% if rd.speaker_id %}
-                            <a class="title-link" href="{{ url_for('main.member_detail', member_id=rd.speaker_id|int) }}">{{ rd.speaker }}</a>
+                            <a class="title-link" href="{{ url_for('main.member_detail', member_id=rd.speaker_id|int, **session_params) }}">{{ rd.speaker }}</a>
                           {% else %}
                             {{ rd.speaker }}
                           {% endif %}
@@ -90,7 +93,7 @@
                                 <div class="row speech-row">
                                   <span>
                                     {% if a.speaker_id %}
-                                      <a class="title-link" href="{{ url_for('main.member_detail', member_id=a.speaker_id|int) }}">{{ a.speaker }}</a>
+                                      <a class="title-link" href="{{ url_for('main.member_detail', member_id=a.speaker_id|int, **session_params) }}">{{ a.speaker }}</a>
                                     {% else %}
                                       {{ a.speaker }}
                                     {% endif %}

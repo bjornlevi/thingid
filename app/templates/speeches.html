@@ -53,7 +53,7 @@
                                 <div>
                                     <strong>
                                         {% if s.member_id %}
-                                            <a href="{{ url_for('main.member_detail', member_id=s.member_id) }}">{{ s.speaker }}</a>
+                                            <a href="{{ url_for('main.member_detail', member_id=s.member_id, **session_params) }}">{{ s.speaker }}</a>
                                         {% else %}
                                             {{ s.speaker }}
                                         {% endif %}
@@ -82,7 +82,7 @@
                                 <div>
                                     <strong>
                                         {% if s.member_id %}
-                                            <a href="{{ url_for('main.member_detail', member_id=s.member_id) }}">{{ s.speaker }}</a>
+                                            <a href="{{ url_for('main.member_detail', member_id=s.member_id, **session_params) }}">{{ s.speaker }}</a>
                                         {% else %}
                                             {{ s.speaker }}
                                         {% endif %}
@@ -111,7 +111,7 @@
                                 <div>
                                     <strong>
                                         {% if s.member_id %}
-                                            <a href="{{ url_for('main.member_detail', member_id=s.member_id) }}">{{ s.speaker }}</a>
+                                            <a href="{{ url_for('main.member_detail', member_id=s.member_id, **session_params) }}">{{ s.speaker }}</a>
                                         {% else %}
                                             {{ s.speaker }}
                                         {% endif %}
@@ -140,7 +140,7 @@
                                 <div>
                                     <strong>
                                         {% if s.member_id %}
-                                            <a href="{{ url_for('main.member_detail', member_id=s.member_id) }}">{{ s.speaker }}</a>
+                                            <a href="{{ url_for('main.member_detail', member_id=s.member_id, **session_params) }}">{{ s.speaker }}</a>
                                         {% else %}
                                             {{ s.speaker }}
                                         {% endif %}
@@ -178,14 +178,14 @@
                         <li>
                             <div class="row">
                                 <div>
-                                    <strong><a href="{{ url_for('main.member_detail', member_id=m.member_id) }}">{{ m.name }}</a></strong>
+                                    <strong><a href="{{ url_for('main.member_detail', member_id=m.member_id, **session_params) }}">{{ m.name }}</a></strong>
                                     {% if m.party %}<span class="pill subtle">{{ m.party }}</span>{% endif %}
                                 </div>
                                 <span class="pill neutral">{{ m.avg_words|round(0) }} orð að meðaltali</span>
                             </div>
                             <div class="row">
                                 <span class="muted">{{ m.count }} ræður</span>
-                                <a href="{{ url_for('main.member_speeches', member_id=m.member_id) }}">Sjá ræður</a>
+                                <a href="{{ url_for('main.member_speeches', member_id=m.member_id, **session_params) }}">Sjá ræður</a>
                             </div>
                         </li>
                     {% else %}
@@ -200,14 +200,14 @@
                         <li>
                             <div class="row">
                                 <div>
-                                    <strong><a href="{{ url_for('main.member_detail', member_id=m.member_id) }}">{{ m.name }}</a></strong>
+                                    <strong><a href="{{ url_for('main.member_detail', member_id=m.member_id, **session_params) }}">{{ m.name }}</a></strong>
                                     {% if m.party %}<span class="pill subtle">{{ m.party }}</span>{% endif %}
                                 </div>
                                 <span class="pill neutral">{% if m.avg_wpm %}{{ "%.1f"|format(m.avg_wpm) }} orð/mín{% else %}—{% endif %}</span>
                             </div>
                             <div class="row">
                                 <span class="muted">{{ m.count }} ræður</span>
-                                <a href="{{ url_for('main.member_speeches', member_id=m.member_id) }}">Sjá ræður</a>
+                                <a href="{{ url_for('main.member_speeches', member_id=m.member_id, **session_params) }}">Sjá ræður</a>
                             </div>
                         </li>
                     {% else %}
@@ -222,14 +222,14 @@
                         <li>
                             <div class="row">
                                 <div>
-                                    <strong><a href="{{ url_for('main.member_detail', member_id=m.member_id) }}">{{ m.name }}</a></strong>
+                                    <strong><a href="{{ url_for('main.member_detail', member_id=m.member_id, **session_params) }}">{{ m.name }}</a></strong>
                                     {% if m.party %}<span class="pill subtle">{{ m.party }}</span>{% endif %}
                                 </div>
                                 <span class="pill neutral">{{ m.count }} ræður</span>
                             </div>
                             <div class="row">
                                 <span class="muted">{{ m.avg_words|round(0) }} orð að meðaltali</span>
-                                <a href="{{ url_for('main.member_speeches', member_id=m.member_id) }}">Sjá ræður</a>
+                                <a href="{{ url_for('main.member_speeches', member_id=m.member_id, **session_params) }}">Sjá ræður</a>
                             </div>
                         </li>
                     {% else %}
@@ -244,14 +244,14 @@
                         <li>
                             <div class="row">
                                 <div>
-                                    <strong><a href="{{ url_for('main.member_detail', member_id=m.member_id) }}">{{ m.name }}</a></strong>
+                                    <strong><a href="{{ url_for('main.member_detail', member_id=m.member_id, **session_params) }}">{{ m.name }}</a></strong>
                                     {% if m.party %}<span class="pill subtle">{{ m.party }}</span>{% endif %}
                                 </div>
                                 <span class="pill neutral">{{ m.count }} ræður</span>
                             </div>
                             <div class="row">
                                 <span class="muted">{{ m.avg_words|round(0) }} orð að meðaltali</span>
-                                <a href="{{ url_for('main.member_speeches', member_id=m.member_id) }}">Sjá ræður</a>
+                                <a href="{{ url_for('main.member_speeches', member_id=m.member_id, **session_params) }}">Sjá ræður</a>
                             </div>
                         </li>
                     {% else %}
@@ -273,7 +273,7 @@
             <div class="filter-row">
                 {% for m in member_options %}
                     {% set active = member_focus and member_focus.member_id == m.member_id %}
-                    <a class="pill filter-pill{% if active %} active{% endif %}" href="{{ url_for('main.member_detail', member_id=m.member_id) }}">
+                    <a class="pill filter-pill{% if active %} active{% endif %}" href="{{ url_for('main.member_detail', member_id=m.member_id, **session_params) }}">
                         {{ m.name }}{% if m.party %} · {{ m.party }}{% endif %} ({{ m.count }})
                     </a>
                 {% else %}
@@ -287,7 +287,7 @@
                         <p class="eyebrow">Yfirlit</p>
                         <h3>
                             {% if member_focus.member_id %}
-                                <a href="{{ url_for('main.member_detail', member_id=member_focus.member_id) }}">{{ member_focus.member.leaf_nafn if member_focus.member else "Þingmaður" }}</a>
+                                <a href="{{ url_for('main.member_detail', member_id=member_focus.member_id, **session_params) }}">{{ member_focus.member.leaf_nafn if member_focus.member else "Þingmaður" }}</a>
                             {% else %}
                                 {{ member_focus.member.leaf_nafn if member_focus.member else "Þingmaður" }}
                             {% endif %}

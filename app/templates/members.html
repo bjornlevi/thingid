@@ -9,6 +9,9 @@
 </section>
 
 <section class="stack">
+    {% if error %}
+        <p class="text-danger">{{ error }}</p>
+    {% endif %}
     {% for party, members in parties.items() %}
         <details class="panel" open>
             <summary>{{ party }}</summary>
@@ -17,12 +20,12 @@
                     {% for m in members %}
                         <div class="member-card">
                             <div class="member-id">
-                                <a href="{{ url_for('main.member_detail', member_id=m.attr_id) }}">
+                                <a href="{{ url_for('main.member_detail', member_id=m.attr_id, **session_params) }}">
                                     <img src="https://www.althingi.is/myndir/mynd/thingmenn/{{ m.attr_id }}/org/mynd.jpg" alt="{{ m.leaf_nafn }}" loading="lazy" onerror="this.style.display='none';">
                                 </a>
                             </div>
                             <div class="member-meta">
-                                <strong><a href="{{ url_for('main.member_detail', member_id=m.attr_id) }}">{{ m.leaf_nafn }}</a></strong>
+                                <strong><a href="{{ url_for('main.member_detail', member_id=m.attr_id, **session_params) }}">{{ m.leaf_nafn }}</a></strong>
                                 {% if m.current_seat %}
                                     <span class="pill subtle">{{ m.current_seat.party_name or "Óflokkaður" }}{% if m.current_seat.type %} · {{ m.current_seat.type }}{% endif %}</span>
                                     {% if m.current_seat.inn or m.current_seat.ut %}
@@ -42,9 +45,9 @@
                                 {% endif %}
                             </div>
                             <div class="links">
-                                <a class="pill link" href="{{ url_for('main.member_attendance', member_id=m.attr_id) }}">Sjá mætingarskýrslu</a>
+                                <a class="pill link" href="{{ url_for('main.member_attendance', member_id=m.attr_id, **session_params) }}">Sjá mætingarskýrslu</a>
                                 {% if m.speech_count %}
-                                    <a class="pill link" href="{{ url_for('main.member_speeches', member_id=m.attr_id) }}">Þingræður ({{ m.speech_count }})</a>
+                                    <a class="pill link" href="{{ url_for('main.member_speeches', member_id=m.attr_id, **session_params) }}">Þingræður ({{ m.speech_count }})</a>
                                 {% endif %}
                             </div>
                             {% if not m.is_pseudo %}

@@ -37,6 +37,10 @@ from .constants import WRITTEN_QUESTION_LABEL, canonical_issue_type
 bp = Blueprint("main", __name__)
 
 
+def _selected_lthing(session: Session) -> Optional[int]:
+    return request.args.get("lthing", type=int) or current_lthing(session)
+
+
 def _get_engine():
     engine = current_app.config.get("ENGINE")
     if engine is None:
@@ -457,12 +461,14 @@ def index():
     engine = _get_engine()
     metrics_by_mal: Dict[int, Any] = {}
     with Session(engine) as session:
+        lthing = _selected_lthing(session)
         issues = session.execute(
-            select(models.ThingmalalistiMal).order_by(models.ThingmalalistiMal.attr_malsnumer)
+            select(models.ThingmalalistiMal)
+            .where(models.ThingmalalistiMal.ingest_lthing == lthing)
+            .order_by(models.ThingmalalistiMal.attr_malsnumer)
         ).scalars().all()
-        lthing = current_lthing(session)
         members = session.execute(
-            select(models.ThingmannalistiThingmadur)
+            select(models.ThingmannalistiThingmadur).where(models.ThingmannalistiThingmadur.ingest_lthing == lthing)
         ).scalars().all()
         seats = session.execute(
             select(MemberSeat).where(MemberSeat.lthing == lthing)
@@ -470,6 +476,7 @@ def index():
 
         votes = session.execute(
             select(models.AtkvaedagreidslurAtkvaedagreidsla)
+            .where(models.AtkvaedagreidslurAtkvaedagreidsla.ingest_lthing == lthing)
         ).scalars().all()
 
         votes_by_mal: Dict[int, List[Any]] = defaultdict(list)
@@ -483,6 +490,7 @@ def index():
         counts_by_vote: Dict[int, Dict[str, int]] = defaultdict(lambda: {"ja": 0, "nei": 0, "greiddu": 0})
         vote_counts_rows = session.execute(
             select(VoteDetail.vote_num, VoteDetail.vote, func.count(VoteDetail.id))
+            .where(VoteDetail.lthing == lthing)
             .group_by(VoteDetail.vote_num, VoteDetail.vote)
         ).all()
         for vote_num, vote_txt, cnt in vote_counts_rows:
@@ -496,6 +504,7 @@ def index():
         # Build lookup of stored þingskjöl (for flutningsmenn enrichment)
         documents = session.execute(
             select(models.ThingskjalalistiThingskjal)
+            .where(models.ThingskjalalistiThingskjal.ingest_lthing == lthing)
         ).scalars().all()
         docs_by_nr: Dict[int, Any] = {}
         for doc in documents:
@@ -507,10 +516,12 @@ def index():
         first_doc_date: Dict[int, dt.datetime] = {}
         first_answer_date: Dict[int, dt.datetime] = {}
         # Pre-fetched issue documents are stored in IssueDocument; join to flutningsmenn via skjalnr
-        issue_docs = session.execute(select(IssueDocument)).scalars().all()
+        issue_docs = session.execute(
+            select(IssueDocument).where(IssueDocument.lthing == lthing)
+        ).scalars().all()
         if manual_models and hasattr(manual_models, "IssueMetrics"):
             try:
-                lthing_val = current_lthing(session)
+                lthing_val = _selected_lthing(session)
                 if lthing_val is not None:
                     for m in session.execute(
                         select(manual_models.IssueMetrics).where(manual_models.IssueMetrics.lthing == lthing_val)
@@ -663,6 +674,9 @@ def index():
     for malnr, status in answered_by_issue.items():
         answer_counts[status] += 1
 
+    error = None
+    if not issues:
+        error = "Engin gögn fundust fyrir þetta löggjafarþing."
     return render_template(
         "index.html",
         issues=issues,
@@ -678,6 +692,7 @@ def index():
         issue_answer_status=answered_by_issue,
         answer_counts=answer_counts,
         written_question_label=WRITTEN_QUESTION_LABEL,
+        error=error,
     )
 
 
@@ -686,18 +701,24 @@ def members():
     engine = _get_engine()
     speech_counts: Dict[int, int] = {}
     with Session(engine) as session:
+        lthing = _selected_lthing(session)
         people = session.execute(
-            select(models.ThingmannalistiThingmadur).order_by(models.ThingmannalistiThingmadur.leaf_nafn)
+            select(models.ThingmannalistiThingmadur)
+            .where(models.ThingmannalistiThingmadur.ingest_lthing == lthing)
+            .order_by(models.ThingmannalistiThingmadur.leaf_nafn)
         ).scalars().all()
-        lthing = current_lthing(session)
         seats = session.execute(
             select(MemberSeat).where(MemberSeat.lthing == lthing)
         ).scalars().all()
         mal_rows = session.execute(
-            select(models.ThingmalalistiMal)
+            select(models.ThingmalalistiMal).where(models.ThingmalalistiMal.ingest_lthing == lthing)
         ).scalars().all()
-        issue_docs = session.execute(select(IssueDocument)).scalars().all()
-        docs_by_nr = session.execute(select(models.ThingskjalalistiThingskjal)).scalars().all()
+        issue_docs = session.execute(
+            select(IssueDocument).where(IssueDocument.lthing == lthing)
+        ).scalars().all()
+        docs_by_nr = session.execute(
+            select(models.ThingskjalalistiThingskjal).where(models.ThingskjalalistiThingskjal.ingest_lthing == lthing)
+        ).scalars().all()
         # vote attendance: prefer materialized vote_session; fallback to raw votes
         vote_sessions = []
         if manual_models and hasattr(manual_models, "VoteSession"):
@@ -710,10 +731,11 @@ def members():
                 select(
                     models.AtkvaedagreidslurAtkvaedagreidsla.attr_atkvaedagreidslunumer,
                     models.AtkvaedagreidslurAtkvaedagreidsla.leaf_timi,
-                )
+                ).where(models.AtkvaedagreidslurAtkvaedagreidsla.ingest_lthing == lthing)
             ).all()
         all_vote_details = session.execute(
             select(VoteDetail.vote_num, VoteDetail.voter_id, VoteDetail.vote)
+            .where(VoteDetail.lthing == lthing)
         ).all()
         vote_nums_with_votes = {vd[0] for vd in all_vote_details if vd[0] is not None}
         vote_sessions = [vs for vs in vote_sessions if vs[0] in vote_nums_with_votes]
@@ -1056,7 +1078,10 @@ def members():
             icelandic_sort_key(x.leaf_nafn or ""),
         ))
 
-    return render_template("members.html", parties=parties, current_lthing=lthing)
+    error = None
+    if not people:
+        error = "Engir þingmenn fundust fyrir þetta löggjafarþing."
+    return render_template("members.html", parties=parties, current_lthing=lthing, error=error)
 
 
 @bp.route("/member/<int:member_id>")
@@ -1067,7 +1092,7 @@ def member_detail(member_id: int):
     NefndMember = getattr(manual_models, "NefndMember", None) if manual_models else None
 
     with Session(engine) as session:
-        lthing = current_lthing(session)
+        lthing = _selected_lthing(session)
         if member_id < 0:
             minister_map = _minister_map(session, lthing)
             minister_by_id = {info["id"]: {"name": name, **info} for name, info in minister_map.items()}
@@ -1152,7 +1177,10 @@ def member_detail(member_id: int):
                 error=None,
             )
         member = session.execute(
-            select(models.ThingmannalistiThingmadur).where(models.ThingmannalistiThingmadur.attr_id == member_id)
+            select(models.ThingmannalistiThingmadur).where(
+                models.ThingmannalistiThingmadur.attr_id == member_id,
+                models.ThingmannalistiThingmadur.ingest_lthing == lthing,
+            )
         ).scalar_one_or_none()
         is_pseudo = False
         seat = None
@@ -1274,10 +1302,15 @@ def member_detail(member_id: int):
 
         include_issues = manual_models and hasattr(manual_models, "IssueDocument")
         if include_issues and (not is_pseudo or member_id > 0):
-            docs = session.execute(select(manual_models.IssueDocument)).scalars().all()
-            mal_rows = session.execute(select(models.ThingmalalistiMal)).scalars().all()
+            docs = session.execute(
+                select(manual_models.IssueDocument).where(manual_models.IssueDocument.lthing == lthing)
+            ).scalars().all()
+            mal_rows = session.execute(
+                select(models.ThingmalalistiMal).where(models.ThingmalalistiMal.ingest_lthing == lthing)
+            ).scalars().all()
             documents = session.execute(
                 select(models.ThingskjalalistiThingskjal)
+                .where(models.ThingskjalalistiThingskjal.ingest_lthing == lthing)
             ).scalars().all()
             docs_by_nr: Dict[int, Any] = {}
             for doc in documents:
@@ -1393,9 +1426,12 @@ def member_attendance(member_id: int):
     engine = _get_engine()
     with Session(engine) as session:
         member = session.execute(
-            select(models.ThingmannalistiThingmadur).where(models.ThingmannalistiThingmadur.attr_id == member_id)
+            select(models.ThingmannalistiThingmadur).where(
+                models.ThingmannalistiThingmadur.attr_id == member_id,
+                models.ThingmannalistiThingmadur.ingest_lthing == lthing,
+            )
         ).scalar_one_or_none()
-        lthing = current_lthing(session)
+        lthing = _selected_lthing(session)
         if member is None:
             return render_template(
                 "member_attendance.html",
@@ -1419,7 +1455,9 @@ def member_attendance(member_id: int):
         nefnd_members = session.execute(
             select(NefndMember).where(NefndMember.lthing == lthing, NefndMember.member_id == member_id)
         ).scalars().all()
-        nefndir = session.execute(select(models.NefndirNefnd)).scalars().all()
+        nefndir = session.execute(
+            select(models.NefndirNefnd).where(models.NefndirNefnd.ingest_lthing == lthing)
+        ).scalars().all()
         meetings = []
         attendance_rows = []
         if manual_models and hasattr(manual_models, "CommitteeMeeting"):
@@ -1440,7 +1478,7 @@ def member_attendance(member_id: int):
             except OperationalError:
                 attendance_rows = []
         people = session.execute(
-            select(models.ThingmannalistiThingmadur)
+            select(models.ThingmannalistiThingmadur).where(models.ThingmannalistiThingmadur.ingest_lthing == lthing)
         ).scalars().all()
         vote_sessions = []
         if manual_models and hasattr(manual_models, "VoteSession"):
@@ -1453,18 +1491,15 @@ def member_attendance(member_id: int):
                 select(
                     models.AtkvaedagreidslurAtkvaedagreidsla.attr_atkvaedagreidslunumer,
                     models.AtkvaedagreidslurAtkvaedagreidsla.leaf_timi,
-                )
+                ).where(models.AtkvaedagreidslurAtkvaedagreidsla.ingest_lthing == lthing)
             ).all()
         all_vote_details = session.execute(
             select(VoteDetail.vote_num, VoteDetail.voter_id, VoteDetail.vote)
+            .where(VoteDetail.lthing == lthing)
         ).all() if manual_models else []
         votes_full = session.execute(
-            select(models.AtkvaedagreidslurAtkvaedagreidsla).where(
-                models.AtkvaedagreidslurAtkvaedagreidsla.attr_thingnumer == lthing
-            )
-        ).scalars().all()
-        votes_full = session.execute(
             select(models.AtkvaedagreidslurAtkvaedagreidsla)
+            .where(models.AtkvaedagreidslurAtkvaedagreidsla.ingest_lthing == lthing)
         ).scalars().all()
 
     if member is None:
@@ -1792,9 +1827,9 @@ def speeches():
     }
     engine = _get_engine()
     with Session(engine) as session:
-        lthing = current_lthing(session)
+        lthing = _selected_lthing(session)
         people = session.execute(
-            select(models.ThingmannalistiThingmadur)
+            select(models.ThingmannalistiThingmadur).where(models.ThingmannalistiThingmadur.ingest_lthing == lthing)
         ).scalars().all()
         member_map = {}
         for p in people:
@@ -1955,6 +1990,9 @@ def speeches():
             for m in member_stats
         ]
 
+    error = None
+    if total_speeches == 0:
+        error = "Engar ræður skráðar fyrir þetta löggjafarþing."
     summary = {
         "total": total_speeches,
         "total_speakers": total_speakers,
@@ -1968,7 +2006,7 @@ def speeches():
         stats=stats,
         member_focus=member_focus,
         member_options=member_options,
-        error=None,
+        error=error,
     )
 
 
@@ -1977,7 +2015,7 @@ def member_speeches(member_id: int):
     Speech = getattr(manual_models, "Speech", None) if manual_models else None
     engine = _get_engine()
     with Session(engine) as session:
-        lthing = current_lthing(session)
+        lthing = _selected_lthing(session)
         member = None
         name_filter = None
         if member_id < 0:
@@ -1994,7 +2032,7 @@ def member_speeches(member_id: int):
                 name_filter = info["name"]
         else:
             people = session.execute(
-                select(models.ThingmannalistiThingmadur)
+                select(models.ThingmannalistiThingmadur).where(models.ThingmannalistiThingmadur.ingest_lthing == lthing)
             ).scalars().all()
             member_map = {}
             for p in people:
@@ -2078,9 +2116,11 @@ def vote_report():
     """
     engine = _get_engine()
     with Session(engine) as session:
-        lthing = current_lthing(session)
+        lthing = _selected_lthing(session)
         people = session.execute(
-            select(models.ThingmannalistiThingmadur).order_by(models.ThingmannalistiThingmadur.leaf_nafn)
+            select(models.ThingmannalistiThingmadur)
+            .where(models.ThingmannalistiThingmadur.ingest_lthing == lthing)
+            .order_by(models.ThingmannalistiThingmadur.leaf_nafn)
         ).scalars().all()
         seats = session.execute(
             select(MemberSeat).where(MemberSeat.lthing == lthing)
@@ -2097,11 +2137,12 @@ def vote_report():
                 select(
                     models.AtkvaedagreidslurAtkvaedagreidsla.attr_atkvaedagreidslunumer,
                     models.AtkvaedagreidslurAtkvaedagreidsla.leaf_timi,
-                )
+                ).where(models.AtkvaedagreidslurAtkvaedagreidsla.ingest_lthing == lthing)
             ).all()
 
         all_vote_details = session.execute(
             select(VoteDetail.vote_num, VoteDetail.voter_id, VoteDetail.vote)
+            .where(VoteDetail.lthing == lthing)
         ).all() if manual_models else []
 
     intervals_by_member = _effective_intervals(seats)
@@ -2212,15 +2253,18 @@ def vote_report():
 def committees():
     engine = _get_engine()
     with Session(engine) as session:
+        lthing = _selected_lthing(session)
         committees = session.execute(
-            select(models.NefndirNefnd).order_by(models.NefndirNefnd.leaf_heiti)
+            select(models.NefndirNefnd)
+            .where(models.NefndirNefnd.ingest_lthing == lthing)
+            .order_by(models.NefndirNefnd.leaf_heiti)
         ).scalars().all()
-        lthing = current_lthing(session)
         mal_rows = session.execute(
-            select(models.ThingmalalistiMal)
+            select(models.ThingmalalistiMal).where(models.ThingmalalistiMal.ingest_lthing == lthing)
         ).scalars().all()
         votes = session.execute(
             select(models.AtkvaedagreidslurAtkvaedagreidsla)
+            .where(models.AtkvaedagreidslurAtkvaedagreidsla.ingest_lthing == lthing)
         ).scalars().all()
         meeting_rows = session.execute(
             select(manual_models.CommitteeMeeting).where(manual_models.CommitteeMeeting.lthing == lthing)
@@ -2236,7 +2280,9 @@ def committees():
             ),
             {"lt": lthing},
         ).fetchall()
-        people = session.execute(select(models.ThingmannalistiThingmadur)).scalars().all()
+        people = session.execute(
+            select(models.ThingmannalistiThingmadur).where(models.ThingmannalistiThingmadur.ingest_lthing == lthing)
+        ).scalars().all()
         nefnd_members_rows = session.execute(
             select(NefndMember).where(NefndMember.lthing == lthing)
         ).scalars().all()
@@ -2444,9 +2490,12 @@ def committees():
     for lst in issues_by_nefnd.values():
         lst.sort(key=lambda x: x["malnr"])
 
+    error = None
+    if not committees:
+        error = "Engar nefndir fundust fyrir þetta löggjafarþing."
     return render_template("committees.html", committees=committees, current_lthing=lthing,
                            members_by_nefnd=members_by_nefnd, issues_by_nefnd=issues_by_nefnd,
-                           attendance_by_nm=attendance_by_nm)
+                           attendance_by_nm=attendance_by_nm, error=error)
 
 
 def register(app):
@@ -2464,10 +2513,18 @@ def agenda():
         agenda_xml = None
 
     with Session(engine) as session:
-        mal_rows = session.execute(select(models.ThingmalalistiMal)).scalars().all()
-        docs = session.execute(select(IssueDocument)).scalars().all() if manual_models and hasattr(manual_models, "IssueDocument") else []
-        votes = session.execute(select(models.AtkvaedagreidslurAtkvaedagreidsla)).scalars().all()
-        minister_map = _minister_map(session, current_lthing(session))
+        lthing = _selected_lthing(session)
+        mal_rows = session.execute(
+            select(models.ThingmalalistiMal).where(models.ThingmalalistiMal.ingest_lthing == lthing)
+        ).scalars().all()
+        docs = session.execute(
+            select(IssueDocument).where(IssueDocument.lthing == lthing)
+        ).scalars().all() if manual_models and hasattr(manual_models, "IssueDocument") else []
+        votes = session.execute(
+            select(models.AtkvaedagreidslurAtkvaedagreidsla)
+            .where(models.AtkvaedagreidslurAtkvaedagreidsla.ingest_lthing == lthing)
+        ).scalars().all()
+        minister_map = _minister_map(session, lthing)
 
     docs_by_mal: Dict[tuple, List[Any]] = defaultdict(list)
     for d in docs:
@@ -2485,6 +2542,7 @@ def agenda():
     agenda_items = []
     fund_info = {}
     fund_lthing = None
+    error = None
     if agenda_xml:
         try:
             root = ET.fromstring(agenda_xml)
@@ -2526,6 +2584,10 @@ def agenda():
         except Exception:
             pass
 
+    if lthing is not None and fund_lthing is not None and lthing != fund_lthing:
+        agenda_items = []
+        error = "Dagskrá er aðeins tiltæk fyrir núverandi þingfund."
+
     # attach speeches (cached) for linked issues
     cache_dir = _cache_dir()
     speeches_by_mal: Dict[tuple, List[Dict[str, Any]]] = defaultdict(list)
@@ -2558,4 +2620,5 @@ def agenda():
     return render_template("agenda.html",
                            fund_info=fund_info,
                            items=agenda_items,
-                           speeches_by_mal=speeches_by_mal)
+                           speeches_by_mal=speeches_by_mal,
+                           error=error)

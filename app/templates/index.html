@@ -32,6 +32,9 @@
     {% endif %}
 </div>
 <section class="stack">
+    {% if error %}
+        <p class="text-danger">{{ error }}</p>
+    {% endif %}
     <ul class="list large">
         {% for issue in issues %}
             {% set parties = issue_parties.get(issue.attr_malsnumer, []) %}
@@ -125,7 +128,7 @@
                                         <div class="row speech-row">
                                             <strong>
                                                 {% if rd.speaker_id %}
-                                                    <a class="title-link" href="{{ url_for('main.member_detail', member_id=rd.speaker_id|int) }}">{{ rd.speaker }}</a>
+                                                    <a class="title-link" href="{{ url_for('main.member_detail', member_id=rd.speaker_id|int, **session_params) }}">{{ rd.speaker }}</a>
                                                     {% if rd.html %}<a class="muted" href="{{ rd.html }}">Lesa</a>{% endif %}
                                                 {% else %}
                                                     {% if rd.html %}
@@ -159,7 +162,7 @@
                                                             <div class="row speech-row">
                                                                 <span>
                                                                     {% if a.speaker_id %}
-                                                                        <a class="title-link" href="{{ url_for('main.member_detail', member_id=a.speaker_id|int) }}">{{ a.speaker }}</a>
+                                                                        <a class="title-link" href="{{ url_for('main.member_detail', member_id=a.speaker_id|int, **session_params) }}">{{ a.speaker }}</a>
                                                                         {% if a.html %}<a class="muted" href="{{ a.html }}">Lesa</a>{% endif %}
                                                                     {% else %}
                                                                         {% if a.html %}
