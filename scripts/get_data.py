@@ -1169,6 +1169,7 @@ def main() -> int:
         vote_details_to_add: List[Any] = []
         seats_to_add: List[Any] = []
         for lthing, yfirlit in targets:
+            print(f"[info] fetching lthing {lthing}")
             scoped_resources = resource_urls_for_lthing(resources, lthing, yfirlit)
             for r in scoped_resources:
                 if "error" in r:
