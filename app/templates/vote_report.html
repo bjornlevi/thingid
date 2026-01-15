@@ -15,7 +15,7 @@
         <li class="panel" id="{{ row.member.attr_id }}">
           <div class="panel-head">
             <div>
-              <h3>{{ row.member.leaf_nafn }}</h3>
+              <h3><a href="{{ url_for('main.member_detail', member_id=row.member.attr_id) }}">{{ row.member.leaf_nafn }}</a></h3>
               {% if row.member.leaf_skammstofun %}<span class="pill neutral">{{ row.member.leaf_skammstofun }}</span>{% endif %}
             </div>
             <div class="text-right">

@@ -3,8 +3,13 @@
 <section class="hero">
   <div>
     <p class="eyebrow">Mæting</p>
-    <h1>{{ member.leaf_nafn }}</h1>
-    <p class="lede">Sundurliðun á mætingu fyrir {{ current_lthing }}. löggjafarþing.</p>
+    {% if member %}
+      <h1><a href="{{ url_for('main.member_detail', member_id=member.attr_id) }}">{{ member.leaf_nafn }}</a></h1>
+      <p class="lede">Sundurliðun á mætingu fyrir {{ current_lthing }}. löggjafarþing.</p>
+    {% else %}
+      <h1>Mætingarskýrsla</h1>
+      <p class="lede">Engar upplýsingar fundust fyrir þennan þingmann.</p>
+    {% endif %}
   </div>
   <div class="hero-meta">
     {% if pct is not none %}
@@ -15,6 +20,9 @@
 </section>
 
 <section class="stack">
+  {% if error %}
+    <p class="text-danger">{{ error }}</p>
+  {% endif %}
   <div class="tab-buttons" style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem;">
     <button class="tab-btn active" data-tab="committees">Nefndir</button>
     <button class="tab-btn" data-tab="votes">Atkvæðagreiðslur</button>

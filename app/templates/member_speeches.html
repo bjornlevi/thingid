@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+    <div>
+        <p class="eyebrow">Ræður eftir þingmanni</p>
+        <h1>
+            {% if member %}
+                <a href="{{ url_for('main.member_detail', member_id=member_id) }}">{{ member.leaf_nafn }}</a>
+            {% else %}
+                Þingmaður
+            {% endif %}
+        </h1>
+        <p class="lede">Yfirlit yfir ræður á yfirstandandi löggjafarþingi.</p>
+        <p>
+            <a href="{{ url_for('main.member_detail', member_id=member_id) }}">Til baka í þingmann</a>
+            ·
+            <a href="{{ url_for('main.speeches') }}">Til baka í þingræður</a>
+        </p>
+    </div>
+    {% if summary %}
+        <div class="card">
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-label">Fjöldi ræðna</div>
+                    <div class="metric-value">{{ summary.total or 0 }}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Heildarorð</div>
+                    <div class="metric-value">{{ summary.total_words or 0 }}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Meðalorð á ræðu</div>
+                    <div class="metric-value">{{ summary.avg_words|default(0)|round(0) }}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Meðalhraði (orð/mín)</div>
+                    <div class="metric-value">
+                        {% if summary.avg_wpm %}{{ "%.1f"|format(summary.avg_wpm) }}{% else %}—{% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+    {% if error %}
+        <p class="text-danger">{{ error }}</p>
+    {% endif %}
+</section>
+
+<section class="stack">
+    <div class="panel">
+        <div class="panel-head">
+            <div>
+                <p class="eyebrow">Nýjustu ræður</p>
+                <h2>Listi ({{ speeches|length }} af {{ summary.total if summary else 0 }})</h2>
+            </div>
+        </div>
+        <div class="panel-body">
+            <ul class="list large">
+                {% for s in speeches %}
+                    <li>
+                        <div class="row">
+                            <div>
+                                <strong>{{ s.title or "Ónefnt mál" }}</strong>
+                                {% if s.date %}<span class="muted">{{ s.date }}</span>{% endif %}
+                            </div>
+                            <span class="pill neutral">{{ s.words or "—" }} orð{% if s.duration %} · {{ s.duration }}{% endif %}{% if s.wpm %} · {{ "%.1f"|format(s.wpm) }} orð/mín{% endif %}</span>
+                        </div>
+                        <div class="row">
+                            {% if s.html %}<a href="{{ s.html }}">Lesa</a>{% elif s.xml %}<a href="{{ s.xml }}">XML</a>{% endif %}
+                        </div>
+                    </li>
+                {% else %}
+                    <li class="muted">Engar ræður fundust fyrir þennan þingmann.</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+</section>
+{% endblock %}

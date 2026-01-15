@@ -51,7 +51,13 @@
                         <li>
                             <div class="row">
                                 <div>
-                                    <strong>{{ s.speaker }}</strong>
+                                    <strong>
+                                        {% if s.member_id %}
+                                            <a href="{{ url_for('main.member_detail', member_id=s.member_id) }}">{{ s.speaker }}</a>
+                                        {% else %}
+                                            {{ s.speaker }}
+                                        {% endif %}
+                                    </strong>
                                     {% if s.party %}<span class="pill subtle">{{ s.party }}</span>{% endif %}
                                 </div>
                                 <span class="pill neutral">{{ s.words or "—" }} orð{% if s.duration %} · {{ s.duration }}{% endif %}{% if s.wpm %} · {{ "%.1f"|format(s.wpm) }} orð/mín{% endif %}</span>
@@ -74,7 +80,13 @@
                         <li>
                             <div class="row">
                                 <div>
-                                    <strong>{{ s.speaker }}</strong>
+                                    <strong>
+                                        {% if s.member_id %}
+                                            <a href="{{ url_for('main.member_detail', member_id=s.member_id) }}">{{ s.speaker }}</a>
+                                        {% else %}
+                                            {{ s.speaker }}
+                                        {% endif %}
+                                    </strong>
                                     {% if s.party %}<span class="pill subtle">{{ s.party }}</span>{% endif %}
                                 </div>
                                 <span class="pill neutral">{{ s.words or "—" }} orð{% if s.duration %} · {{ s.duration }}{% endif %}{% if s.wpm %} · {{ "%.1f"|format(s.wpm) }} orð/mín{% endif %}</span>
@@ -91,13 +103,19 @@
                 </ul>
             </div>
             <div>
-                <h3>Hraðustu ræður</h3>
+                <h3>Hröðustu ræður</h3>
                 <ul class="list large">
                     {% for s in stats.fastest %}
                         <li>
                             <div class="row">
                                 <div>
-                                    <strong>{{ s.speaker }}</strong>
+                                    <strong>
+                                        {% if s.member_id %}
+                                            <a href="{{ url_for('main.member_detail', member_id=s.member_id) }}">{{ s.speaker }}</a>
+                                        {% else %}
+                                            {{ s.speaker }}
+                                        {% endif %}
+                                    </strong>
                                     {% if s.party %}<span class="pill subtle">{{ s.party }}</span>{% endif %}
                                 </div>
                                 <span class="pill neutral">{% if s.wpm %}{{ "%.1f"|format(s.wpm) }} orð/mín{% else %}—{% endif %}{% if s.words %} · {{ s.words }} orð{% endif %}{% if s.duration %} · {{ s.duration }}{% endif %}</span>
@@ -120,7 +138,13 @@
                         <li>
                             <div class="row">
                                 <div>
-                                    <strong>{{ s.speaker }}</strong>
+                                    <strong>
+                                        {% if s.member_id %}
+                                            <a href="{{ url_for('main.member_detail', member_id=s.member_id) }}">{{ s.speaker }}</a>
+                                        {% else %}
+                                            {{ s.speaker }}
+                                        {% endif %}
+                                    </strong>
                                     {% if s.party %}<span class="pill subtle">{{ s.party }}</span>{% endif %}
                                 </div>
                                 <span class="pill neutral">{% if s.wpm %}{{ "%.1f"|format(s.wpm) }} orð/mín{% else %}—{% endif %}{% if s.words %} · {{ s.words }} orð{% endif %}{% if s.duration %} · {{ s.duration }}{% endif %}</span>
@@ -148,20 +172,20 @@
         </div>
         <div class="panel-body stat-list-grid">
             <div>
-                <h3>Lengri meðalræður</h3>
+                <h3>Mesta meðallengd</h3>
                 <ul class="list large">
                     {% for m in stats.avg_length %}
                         <li>
                             <div class="row">
                                 <div>
-                                    <strong>{{ m.name }}</strong>
+                                    <strong><a href="{{ url_for('main.member_detail', member_id=m.member_id) }}">{{ m.name }}</a></strong>
                                     {% if m.party %}<span class="pill subtle">{{ m.party }}</span>{% endif %}
                                 </div>
                                 <span class="pill neutral">{{ m.avg_words|round(0) }} orð að meðaltali</span>
                             </div>
                             <div class="row">
                                 <span class="muted">{{ m.count }} ræður</span>
-                                <a href="{{ url_for('main.speeches', member_id=m.member_id) }}">Sjá ræður</a>
+                                <a href="{{ url_for('main.member_speeches', member_id=m.member_id) }}">Sjá ræður</a>
                             </div>
                         </li>
                     {% else %}
@@ -170,20 +194,20 @@
                 </ul>
             </div>
             <div>
-                <h3>Hraðari meðalhraði</h3>
+                <h3>Hæsti meðalhraði</h3>
                 <ul class="list large">
                     {% for m in stats.avg_speed %}
                         <li>
                             <div class="row">
                                 <div>
-                                    <strong>{{ m.name }}</strong>
+                                    <strong><a href="{{ url_for('main.member_detail', member_id=m.member_id) }}">{{ m.name }}</a></strong>
                                     {% if m.party %}<span class="pill subtle">{{ m.party }}</span>{% endif %}
                                 </div>
                                 <span class="pill neutral">{% if m.avg_wpm %}{{ "%.1f"|format(m.avg_wpm) }} orð/mín{% else %}—{% endif %}</span>
                             </div>
                             <div class="row">
                                 <span class="muted">{{ m.count }} ræður</span>
-                                <a href="{{ url_for('main.speeches', member_id=m.member_id) }}">Sjá ræður</a>
+                                <a href="{{ url_for('main.member_speeches', member_id=m.member_id) }}">Sjá ræður</a>
                             </div>
                         </li>
                     {% else %}
@@ -192,20 +216,20 @@
                 </ul>
             </div>
             <div>
-                <h3>Mestur fjöldi ræðna</h3>
+                <h3>Mestur fjöldi ræða</h3>
                 <ul class="list large">
                     {% for m in stats.most_speeches %}
                         <li>
                             <div class="row">
                                 <div>
-                                    <strong>{{ m.name }}</strong>
+                                    <strong><a href="{{ url_for('main.member_detail', member_id=m.member_id) }}">{{ m.name }}</a></strong>
                                     {% if m.party %}<span class="pill subtle">{{ m.party }}</span>{% endif %}
                                 </div>
                                 <span class="pill neutral">{{ m.count }} ræður</span>
                             </div>
                             <div class="row">
                                 <span class="muted">{{ m.avg_words|round(0) }} orð að meðaltali</span>
-                                <a href="{{ url_for('main.speeches', member_id=m.member_id) }}">Sjá ræður</a>
+                                <a href="{{ url_for('main.member_speeches', member_id=m.member_id) }}">Sjá ræður</a>
                             </div>
                         </li>
                     {% else %}
@@ -220,14 +244,14 @@
                         <li>
                             <div class="row">
                                 <div>
-                                    <strong>{{ m.name }}</strong>
+                                    <strong><a href="{{ url_for('main.member_detail', member_id=m.member_id) }}">{{ m.name }}</a></strong>
                                     {% if m.party %}<span class="pill subtle">{{ m.party }}</span>{% endif %}
                                 </div>
                                 <span class="pill neutral">{{ m.count }} ræður</span>
                             </div>
                             <div class="row">
                                 <span class="muted">{{ m.avg_words|round(0) }} orð að meðaltali</span>
-                                <a href="{{ url_for('main.speeches', member_id=m.member_id) }}">Sjá ræður</a>
+                                <a href="{{ url_for('main.member_speeches', member_id=m.member_id) }}">Sjá ræður</a>
                             </div>
                         </li>
                     {% else %}
@@ -249,7 +273,7 @@
             <div class="filter-row">
                 {% for m in member_options %}
                     {% set active = member_focus and member_focus.member_id == m.member_id %}
-                    <a class="pill filter-pill{% if active %} active{% endif %}" href="{{ url_for('main.speeches', member_id=m.member_id) }}">
+                    <a class="pill filter-pill{% if active %} active{% endif %}" href="{{ url_for('main.member_detail', member_id=m.member_id) }}">
                         {{ m.name }}{% if m.party %} · {{ m.party }}{% endif %} ({{ m.count }})
                     </a>
                 {% else %}
@@ -261,7 +285,13 @@
                 <div class="row">
                     <div>
                         <p class="eyebrow">Yfirlit</p>
-                        <h3>{{ member_focus.member.leaf_nafn if member_focus.member else "Þingmaður" }}</h3>
+                        <h3>
+                            {% if member_focus.member_id %}
+                                <a href="{{ url_for('main.member_detail', member_id=member_focus.member_id) }}">{{ member_focus.member.leaf_nafn if member_focus.member else "Þingmaður" }}</a>
+                            {% else %}
+                                {{ member_focus.member.leaf_nafn if member_focus.member else "Þingmaður" }}
+                            {% endif %}
+                        </h3>
                         <p class="muted">
                             {{ member_focus.count }} ræður ·
                             {% if member_focus.avg_words %}{{ member_focus.avg_words|round(0) }} orð að meðaltali{% endif %}
@@ -288,7 +318,7 @@
                     {% endfor %}
                 </ul>
             {% else %}
-                <p class="muted">Veldu þingmann til að skoða nýjustu ræður.</p>
+                <p class="muted">Veldu þingmann til að opna yfirlit.</p>
             {% endif %}
         </div>
     </div>

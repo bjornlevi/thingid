@@ -4,13 +4,14 @@ import datetime as dt
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
+import zlib
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from flask import Blueprint, current_app, render_template, request
-from sqlalchemy import select, func, text
+from sqlalchemy import select, func, text, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 from urllib.parse import quote
@@ -216,11 +217,66 @@ def _fmt_seconds(seconds: Optional[int]) -> Optional[str]:
     return f"{minutes:02d}:{sec:02d}"
 
 
+def _pseudo_member_id(name: str) -> Optional[int]:
+    key = (name or "").strip()
+    if not key:
+        return None
+    value = zlib.crc32(key.casefold().encode("utf-8")) or 1
+    return -int(value)
+
+
+def _minister_records(session: Session, lthing: Optional[int]) -> List[Dict[str, Any]]:
+    Speech = getattr(manual_models, "Speech", None) if manual_models else None
+    if not Speech:
+        return []
+    filters = [
+        Speech.member_id.is_(None),
+        Speech.speaker_name.is_not(None),
+        Speech.speaker_role.is_not(None),
+    ]
+    if lthing is not None:
+        filters.append(Speech.lthing == lthing)
+    role_lower = func.lower(Speech.speaker_role)
+    role_filter = or_(role_lower.like("%ráðherra%"), role_lower.like("%radherra%"))
+    rows = session.execute(
+        select(
+            Speech.speaker_name,
+            func.max(Speech.speaker_role),
+            func.count(),
+        ).where(*filters, role_filter).group_by(Speech.speaker_name)
+    ).all()
+    out = []
+    for name, role, count in rows:
+        if not name:
+            continue
+        out.append({
+            "name": name,
+            "role": role,
+            "count": count or 0,
+        })
+    return out
+
+
+def _minister_map(session: Session, lthing: Optional[int]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for rec in _minister_records(session, lthing):
+        pid = _pseudo_member_id(rec["name"])
+        if pid is None:
+            continue
+        out[rec["name"].strip()] = {
+            "id": pid,
+            "role": rec.get("role"),
+            "count": rec.get("count", 0),
+        }
+    return out
+
+
 def _cached_speeches(
     url: Optional[str],
     cache_dir: Path,
     cache: Dict[str, List[Dict[str, Any]]],
     party_by_member: Optional[Dict[int, str]] = None,
+    name_to_member_id: Optional[Dict[str, int]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Parse speeches for an issue from cached detail XML.
@@ -279,6 +335,8 @@ def _cached_speeches(
                     speaker = f"Þingmaður {tm_id}"
             if not speaker and is_forseti:
                 speaker = "Forseti Alþingis"
+            if not speaker_id and name_to_member_id and speaker:
+                speaker_id = name_to_member_id.get(speaker.strip())
             start = None
             end = None
             kind = None
@@ -526,6 +584,8 @@ def index():
     parties_by_issue: Dict[int, set] = defaultdict(set)
     type_by_issue: Dict[int, str] = {}
     answered_by_issue: Dict[int, str] = {}
+    minister_map = _minister_map(session, lthing)
+    name_to_id = {name: info["id"] for name, info in minister_map.items()}
     for issue in issues:
         key = issue.attr_malsnumer
         if key is None:
@@ -573,6 +633,7 @@ def index():
             cache_dir,
             speeches_cache,
             party_by_member=party_by_member,
+            name_to_member_id=name_to_id,
         )
         # party attribution via primary flutningsmaður on earliest doc (if available)
         docs_for_issue = docs_by_mal.get(int(key), [])
@@ -685,6 +746,7 @@ def members():
                 speech_counts = {int(mid): cnt for mid, cnt in rows if mid is not None}
             except Exception:
                 speech_counts = {}
+        minister_map = _minister_map(session, lthing)
 
     docs_map = {}
     for d in docs_by_nr:
@@ -906,6 +968,77 @@ def members():
         p.committee_att_pct = (ca_att / ca_total * 100) if ca_total else None
         p.speech_count = speech_counts.get(mid, 0)
 
+    if minister_map:
+        for name, info in minister_map.items():
+            pid = info.get("id")
+            if pid is None:
+                continue
+            seat_proxy = type("SeatProxy", (), {
+                "party_name": "Ráðherrar",
+                "type": (info.get("role") or "ráðherra"),
+                "kjordaemi_name": None,
+                "inn": None,
+                "ut": None,
+            })
+            pseudo = type("MemberProxy", (), {
+                "attr_id": pid,
+                "leaf_nafn": name,
+                "leaf_skammstofun": None,
+                "leaf_faedingardagur": None,
+                "current_seat": seat_proxy,
+                "vote_att_pct": None,
+                "committee_att_pct": None,
+                "speech_count": info.get("count", 0),
+                "issues": [],
+                "cv_slug": None,
+                "is_pseudo": True,
+            })
+            people.append(pseudo)
+
+    if manual_models and hasattr(manual_models, "Speech"):
+        try:
+            role_lower = func.lower(manual_models.Speech.speaker_role)
+            missing_rows = session.execute(
+                select(
+                    manual_models.Speech.member_id,
+                    func.max(manual_models.Speech.speaker_name),
+                    func.max(manual_models.Speech.speaker_role),
+                ).where(
+                    manual_models.Speech.lthing == lthing,
+                    manual_models.Speech.member_id.is_not(None),
+                    manual_models.Speech.speaker_name.is_not(None),
+                    manual_models.Speech.speaker_role.is_not(None),
+                    or_(role_lower.like("%ráðherra%"), role_lower.like("%radherra%")),
+                ).group_by(manual_models.Speech.member_id)
+            ).all()
+            member_ids = {int(p.attr_id) for p in people if getattr(p, "attr_id", None) is not None}
+            for mid, name, role in missing_rows:
+                if mid is None or int(mid) in member_ids or not name:
+                    continue
+                seat_proxy = type("SeatProxy", (), {
+                    "party_name": "Ráðherrar",
+                    "type": role or "ráðherra",
+                    "kjordaemi_name": None,
+                    "inn": None,
+                    "ut": None,
+                })
+                pseudo = type("MemberProxy", (), {
+                    "attr_id": int(mid),
+                    "leaf_nafn": name,
+                    "leaf_skammstofun": None,
+                    "leaf_faedingardagur": None,
+                    "current_seat": seat_proxy,
+                    "vote_att_pct": None,
+                    "committee_att_pct": None,
+                    "speech_count": speech_counts.get(int(mid), 0),
+                    "issues": [],
+                    "cv_slug": None,
+                    "is_pseudo": True,
+                })
+                people.append(pseudo)
+        except Exception:
+            pass
+
     def party_for_member(m):
         if getattr(m, "current_seat", None) and m.current_seat.party_name:
             return m.current_seat.party_name
@@ -924,6 +1057,312 @@ def members():
         ))
 
     return render_template("members.html", parties=parties, current_lthing=lthing)
+
+
+@bp.route("/member/<int:member_id>")
+def member_detail(member_id: int):
+    engine = _get_engine()
+    Speech = getattr(manual_models, "Speech", None) if manual_models else None
+    MemberSeat = getattr(manual_models, "MemberSeat", None) if manual_models else None
+    NefndMember = getattr(manual_models, "NefndMember", None) if manual_models else None
+
+    with Session(engine) as session:
+        lthing = current_lthing(session)
+        if member_id < 0:
+            minister_map = _minister_map(session, lthing)
+            minister_by_id = {info["id"]: {"name": name, **info} for name, info in minister_map.items()}
+            info = minister_by_id.get(member_id)
+            if not info:
+                return render_template(
+                    "member.html",
+                    current_lthing=lthing,
+                    member=None,
+                    seat=None,
+                    committees=[],
+                    summary=None,
+                    issues=[],
+                    speeches=[],
+                    error="Þingmaður fannst ekki.",
+                )
+            member = type("MemberProxy", (), {
+                "attr_id": member_id,
+                "leaf_nafn": info["name"],
+                "leaf_skammstofun": None,
+                "is_pseudo": True,
+                "cv_slug": None,
+            })
+            seat = type("SeatProxy", (), {
+                "party_name": "Ráðherrar",
+                "type": info.get("role") or "ráðherra",
+                "kjordaemi_name": None,
+                "inn": None,
+                "ut": None,
+            })
+            committees = []
+            summary = None
+            speeches = []
+            issues = []
+            if Speech:
+                filters = [Speech.member_id.is_(None), Speech.speaker_name == info["name"]]
+                if lthing is not None:
+                    filters.append(Speech.lthing == lthing)
+                total_speeches = session.execute(
+                    select(func.count()).where(*filters)
+                ).scalar() or 0
+                total_words = session.execute(
+                    select(func.sum(Speech.word_count)).where(*(filters + [Speech.word_count.is_not(None)]))
+                ).scalar() or 0
+                avg_wpm = session.execute(
+                    select(func.avg(Speech.words_per_minute)).where(*(filters + [Speech.words_per_minute.is_not(None)]))
+                ).scalar()
+                last_speech = session.execute(
+                    select(func.max(Speech.start_time)).where(*filters)
+                ).scalar()
+                summary = {
+                    "total": total_speeches,
+                    "total_words": total_words,
+                    "avg_words": (total_words / total_speeches) if total_speeches else None,
+                    "avg_wpm": avg_wpm,
+                    "last_speech": last_speech,
+                }
+                speech_rows = session.execute(
+                    select(Speech).where(*filters).order_by(Speech.start_time.desc()).limit(10)
+                ).scalars().all()
+                for s in speech_rows:
+                    title = getattr(s, "issue_malsheiti", None) or getattr(s, "kind", None) or getattr(s, "umraeda", None)
+                    speeches.append({
+                        "id": s.id,
+                        "title": title,
+                        "date": getattr(s, "date", None),
+                        "words": getattr(s, "word_count", None),
+                        "wpm": getattr(s, "words_per_minute", None),
+                        "duration": _fmt_seconds(getattr(s, "duration_seconds", None)),
+                        "html": getattr(s, "html_url", None),
+                        "xml": getattr(s, "xml_url", None),
+                    })
+            return render_template(
+                "member.html",
+                current_lthing=lthing,
+                member=member,
+                seat=seat,
+                committees=committees,
+                summary=summary,
+                issues=issues,
+                speeches=speeches,
+                error=None,
+            )
+        member = session.execute(
+            select(models.ThingmannalistiThingmadur).where(models.ThingmannalistiThingmadur.attr_id == member_id)
+        ).scalar_one_or_none()
+        is_pseudo = False
+        seat = None
+        committees = []
+        issues = []
+        if member is None:
+            role_lower = func.lower(Speech.speaker_role) if Speech else None
+            info = None
+            if Speech and role_lower is not None:
+                info = session.execute(
+                    select(
+                        Speech.speaker_name,
+                        func.max(Speech.speaker_role),
+                    ).where(
+                        Speech.member_id == member_id,
+                        Speech.speaker_name.is_not(None),
+                        Speech.speaker_role.is_not(None),
+                        or_(role_lower.like("%ráðherra%"), role_lower.like("%radherra%")),
+                    )
+                ).first()
+            if info and info[0]:
+                member = type("MemberProxy", (), {
+                    "attr_id": member_id,
+                    "leaf_nafn": info[0],
+                    "leaf_skammstofun": None,
+                    "is_pseudo": True,
+                    "cv_slug": None,
+                })
+                seat = type("SeatProxy", (), {
+                    "party_name": "Ráðherrar",
+                    "type": info[1] or "ráðherra",
+                    "kjordaemi_name": None,
+                    "inn": None,
+                    "ut": None,
+                })
+                is_pseudo = True
+            else:
+                return render_template(
+                    "member.html",
+                    current_lthing=lthing,
+                    member=None,
+                    seat=None,
+                    committees=[],
+                    summary=None,
+                    issues=[],
+                    speeches=[],
+                    error="Þingmaður fannst ekki.",
+                )
+
+        if not is_pseudo and MemberSeat:
+            seats = session.execute(
+                select(MemberSeat).where(MemberSeat.lthing == lthing, MemberSeat.member_id == member_id)
+            ).scalars().all()
+            if seats:
+                seat = max(seats, key=lambda s: parse_date(s.inn) or dt.datetime.min)
+
+        if not is_pseudo and NefndMember:
+            nm_rows = session.execute(
+                select(NefndMember).where(NefndMember.lthing == lthing, NefndMember.member_id == member_id)
+            ).scalars().all()
+            if nm_rows:
+                nefnd_ids = [int(nm.nefnd_id) for nm in nm_rows if nm.nefnd_id is not None]
+                nefnd_map = {}
+                if nefnd_ids:
+                    nefnd_rows = session.execute(
+                        select(models.NefndirNefnd).where(models.NefndirNefnd.attr_id.in_(nefnd_ids))
+                    ).scalars().all()
+                    nefnd_map = {int(n.attr_id): n for n in nefnd_rows if n.attr_id is not None}
+                for nm in nm_rows:
+                    nid = int(nm.nefnd_id) if nm.nefnd_id is not None else None
+                    nefnd = nefnd_map.get(nid) if nid is not None else None
+                    committees.append({
+                        "id": nid,
+                        "name": getattr(nefnd, "leaf_heiti", None) or nm.name or "Ónefnd",
+                        "role": nm.role,
+                    })
+                committees.sort(key=lambda c: icelandic_sort_key(c["name"] or ""))
+
+        summary = None
+        speeches = []
+        if Speech:
+            filters = [Speech.member_id == member_id]
+            if lthing is not None:
+                filters.append(Speech.lthing == lthing)
+            total_speeches = session.execute(
+                select(func.count()).where(*filters)
+            ).scalar() or 0
+            total_words = session.execute(
+                select(func.sum(Speech.word_count)).where(*(filters + [Speech.word_count.is_not(None)]))
+            ).scalar() or 0
+            avg_wpm = session.execute(
+                select(func.avg(Speech.words_per_minute)).where(*(filters + [Speech.words_per_minute.is_not(None)]))
+            ).scalar()
+            last_speech = session.execute(
+                select(func.max(Speech.start_time)).where(*filters)
+            ).scalar()
+            summary = {
+                "total": total_speeches,
+                "total_words": total_words,
+                "avg_words": (total_words / total_speeches) if total_speeches else None,
+                "avg_wpm": avg_wpm,
+                "last_speech": last_speech,
+            }
+            speech_rows = session.execute(
+                select(Speech).where(*filters).order_by(Speech.start_time.desc()).limit(10)
+            ).scalars().all()
+            for s in speech_rows:
+                title = getattr(s, "issue_malsheiti", None) or getattr(s, "kind", None) or getattr(s, "umraeda", None)
+                speeches.append({
+                    "id": s.id,
+                    "title": title,
+                    "date": getattr(s, "date", None),
+                    "words": getattr(s, "word_count", None),
+                    "wpm": getattr(s, "words_per_minute", None),
+                    "duration": _fmt_seconds(getattr(s, "duration_seconds", None)),
+                    "html": getattr(s, "html_url", None),
+                    "xml": getattr(s, "xml_url", None),
+                })
+
+        include_issues = manual_models and hasattr(manual_models, "IssueDocument")
+        if include_issues and (not is_pseudo or member_id > 0):
+            docs = session.execute(select(manual_models.IssueDocument)).scalars().all()
+            mal_rows = session.execute(select(models.ThingmalalistiMal)).scalars().all()
+            documents = session.execute(
+                select(models.ThingskjalalistiThingskjal)
+            ).scalars().all()
+            docs_by_nr: Dict[int, Any] = {}
+            for doc in documents:
+                attach_flutningsmenn(doc)
+                if doc.attr_skjalsnumer is not None:
+                    docs_by_nr[int(doc.attr_skjalsnumer)] = doc
+            mal_by_key = {(m.attr_malsnumer, getattr(m, "attr_malsflokkur", None)): m for m in mal_rows if m.attr_malsnumer is not None}
+            docs_by_mal: Dict[tuple, List[Any]] = defaultdict(list)
+            for d in docs:
+                if d.malnr is not None:
+                    key = (int(d.malnr), getattr(d, "malflokkur", None))
+                    docs_by_mal[key].append(d)
+
+            # Determine primary flutningsmaður per mál (prefer non-answer docs).
+            mal_primary: Dict[tuple, Dict[str, Any]] = {}
+            for d in docs:
+                skjalnr = d.skjalnr
+                if skjalnr is None:
+                    continue
+                if d.skjalategund and "svar" in d.skjalategund.lower():
+                    continue
+                th_doc = docs_by_nr.get(skjalnr)
+                if not th_doc:
+                    continue
+                mid = flutningsmenn_primary_id(th_doc)
+                if mid is None:
+                    continue
+                mal_key = (int(d.malnr), getattr(d, "malflokkur", None))
+                existing = mal_primary.get(mal_key)
+                if existing is None or (existing.get("skjalnr") or 1e9) > skjalnr:
+                    mal_primary[mal_key] = {"member_id": mid, "issue_doc": d, "skjalnr": skjalnr}
+
+            for d in docs:
+                skjalnr = d.skjalnr
+                if skjalnr is None:
+                    continue
+                if not (d.skjalategund and "svar" in d.skjalategund.lower()):
+                    continue
+                mal_key = (int(d.malnr), getattr(d, "malflokkur", None))
+                if mal_key in mal_primary:
+                    continue
+                th_doc = docs_by_nr.get(skjalnr)
+                if not th_doc:
+                    continue
+                mid = flutningsmenn_primary_id(th_doc)
+                if mid is None:
+                    continue
+                mal_primary[mal_key] = {"member_id": mid, "issue_doc": d, "skjalnr": skjalnr}
+
+            for mal_key, info in mal_primary.items():
+                if int(info["member_id"]) != member_id:
+                    continue
+                mal = mal_by_key.get(mal_key)
+                if not mal:
+                    continue
+                docs_for_mal = docs_by_mal.get(mal_key, [])
+                answer_link = None
+                for d in docs_for_mal:
+                    if d.skjalategund and "svar" in d.skjalategund.lower():
+                        answer_link = d.slod_html or d.slod_xml
+                        break
+                issues.append({
+                    "malnr": mal_key[0],
+                    "title": mal.leaf_malsheiti,
+                    "html": mal.leaf_html,
+                    "xml": mal.leaf_xml,
+                    "answer": answer_link,
+                })
+            issues.sort(key=lambda x: x["malnr"])
+
+        if not is_pseudo:
+            member.cv_slug = quote((member.leaf_nafn or "").replace(" ", "_"))
+            member.is_pseudo = False
+
+    return render_template(
+        "member.html",
+        current_lthing=lthing,
+        member=member,
+        seat=seat,
+        committees=committees,
+        summary=summary,
+        issues=issues,
+        speeches=speeches,
+        error=None,
+    )
 
 
 def _fundargerd_link(raw_xml: str) -> Optional[str]:
@@ -957,6 +1396,23 @@ def member_attendance(member_id: int):
             select(models.ThingmannalistiThingmadur).where(models.ThingmannalistiThingmadur.attr_id == member_id)
         ).scalar_one_or_none()
         lthing = current_lthing(session)
+        if member is None:
+            return render_template(
+                "member_attendance.html",
+                member=None,
+                current_lthing=lthing,
+                attended=0,
+                total=0,
+                pct=None,
+                records=[],
+                vote_expected=[],
+                vote_attended=0,
+                vote_notified=0,
+                vote_absent=0,
+                vote_total=0,
+                vote_pct=None,
+                error="Mætingarskýrsla fannst ekki fyrir þennan þingmann.",
+            )
         seats = session.execute(
             select(MemberSeat).where(MemberSeat.lthing == lthing, MemberSeat.member_id == member_id)
         ).scalars().all()
@@ -1371,12 +1827,20 @@ def speeches():
             select(func.avg(Speech.words_per_minute)).where(*(filters + [Speech.words_per_minute.is_not(None)]))
         ).scalar()
 
+        minister_map = _minister_map(session, lthing)
+        minister_name_to_id = {name: info["id"] for name, info in minister_map.items()}
+
         def speech_item(s):
             member = member_map.get(int(s.member_id)) if getattr(s, "member_id", None) is not None else None
             title = getattr(s, "issue_malsheiti", None) or getattr(s, "kind", None) or getattr(s, "umraeda", None)
+            member_id = getattr(s, "member_id", None)
+            if member_id is None:
+                name_key = (getattr(s, "speaker_name", None) or "").strip()
+                if name_key in minister_name_to_id:
+                    member_id = minister_name_to_id[name_key]
             return {
                 "id": s.id,
-                "member_id": getattr(s, "member_id", None),
+                "member_id": member_id,
                 "speaker": getattr(member, "leaf_nafn", None) or getattr(s, "speaker_name", None) or "Ónafngreindur",
                 "party": getattr(member, "leaf_skammstofun", None),
                 "words": getattr(s, "word_count", None),
@@ -1430,18 +1894,40 @@ def speeches():
             })
         member_stats.sort(key=lambda m: icelandic_sort_key(m["name"]))
 
+        eligible_member_ids = None
+        if manual_models and hasattr(manual_models, "MemberSeat"):
+            try:
+                MemberSeat = manual_models.MemberSeat
+                seat_types = session.execute(
+                    select(MemberSeat.member_id, MemberSeat.type)
+                    .where(MemberSeat.lthing == lthing, MemberSeat.type.is_not(None))
+                ).all()
+                eligible_member_ids = {
+                    int(mid)
+                    for (mid, mtype) in seat_types
+                    if mid is not None and (mtype or "").strip().lower() != "varamaður"
+                }
+            except Exception:
+                eligible_member_ids = None
+
         def top_by(key: str, reverse: bool = True) -> List[Dict[str, Any]]:
             return sorted(member_stats, key=lambda m: (m.get(key) or 0, icelandic_sort_key(m["name"])), reverse=reverse)[:5]
+
+        def top_by_eligible(key: str, reverse: bool = True) -> List[Dict[str, Any]]:
+            if not eligible_member_ids:
+                return top_by(key, reverse=reverse)
+            eligible = [m for m in member_stats if m["member_id"] in eligible_member_ids]
+            return sorted(eligible, key=lambda m: (m.get(key) or 0, icelandic_sort_key(m["name"])), reverse=reverse)[:5]
 
         stats = {
             "longest": [speech_item(s) for s in longest],
             "shortest": [speech_item(s) for s in shortest],
             "fastest": [speech_item(s) for s in fastest],
             "slowest": [speech_item(s) for s in slowest],
-            "avg_length": top_by("avg_words"),
-            "avg_speed": top_by("avg_wpm"),
+            "avg_length": top_by_eligible("avg_words"),
+            "avg_speed": top_by_eligible("avg_wpm"),
             "most_speeches": top_by("count"),
-            "fewest_speeches": top_by("count", reverse=False),
+            "fewest_speeches": top_by_eligible("count", reverse=False),
         }
 
         member_id = request.args.get("member_id", type=int)
@@ -1482,6 +1968,105 @@ def speeches():
         stats=stats,
         member_focus=member_focus,
         member_options=member_options,
+        error=None,
+    )
+
+
+@bp.route("/speeches/member/<int:member_id>")
+def member_speeches(member_id: int):
+    Speech = getattr(manual_models, "Speech", None) if manual_models else None
+    engine = _get_engine()
+    with Session(engine) as session:
+        lthing = current_lthing(session)
+        member = None
+        name_filter = None
+        if member_id < 0:
+            minister_map = _minister_map(session, lthing)
+            minister_by_id = {info["id"]: {"name": name, **info} for name, info in minister_map.items()}
+            info = minister_by_id.get(member_id)
+            if info:
+                member = type("MemberProxy", (), {
+                    "attr_id": member_id,
+                    "leaf_nafn": info["name"],
+                    "leaf_skammstofun": None,
+                    "is_pseudo": True,
+                })
+                name_filter = info["name"]
+        else:
+            people = session.execute(
+                select(models.ThingmannalistiThingmadur)
+            ).scalars().all()
+            member_map = {}
+            for p in people:
+                if getattr(p, "attr_id", None) is not None:
+                    try:
+                        member_map[int(p.attr_id)] = p
+                    except Exception:
+                        continue
+            member = member_map.get(int(member_id))
+        if not Speech:
+            return render_template(
+                "member_speeches.html",
+                current_lthing=lthing,
+                member=member,
+                member_id=member_id,
+                summary=None,
+                speeches=[],
+                limit=0,
+                error="Engin ræðugögn tiltæk.",
+            )
+
+        if name_filter:
+            filters = [Speech.member_id.is_(None), Speech.speaker_name == name_filter]
+        else:
+            filters = [Speech.member_id == member_id]
+        if lthing is not None:
+            filters.append(Speech.lthing == lthing)
+
+        total_speeches = session.execute(
+            select(func.count()).where(*filters)
+        ).scalar() or 0
+        total_words = session.execute(
+            select(func.sum(Speech.word_count)).where(*(filters + [Speech.word_count.is_not(None)]))
+        ).scalar() or 0
+        avg_wpm = session.execute(
+            select(func.avg(Speech.words_per_minute)).where(*(filters + [Speech.words_per_minute.is_not(None)]))
+        ).scalar()
+
+        limit = request.args.get("limit", type=int) or 200
+        limit = max(1, min(limit, 500))
+        speech_rows = session.execute(
+            select(Speech).where(*filters).order_by(Speech.start_time.desc()).limit(limit)
+        ).scalars().all()
+
+        def speech_item(s):
+            title = getattr(s, "issue_malsheiti", None) or getattr(s, "kind", None) or getattr(s, "umraeda", None)
+            return {
+                "id": s.id,
+                "words": getattr(s, "word_count", None),
+                "wpm": getattr(s, "words_per_minute", None),
+                "duration": _fmt_seconds(getattr(s, "duration_seconds", None)),
+                "date": getattr(s, "date", None),
+                "title": title,
+                "html": getattr(s, "html_url", None),
+                "xml": getattr(s, "xml_url", None),
+            }
+
+        summary = {
+            "total": total_speeches,
+            "total_words": total_words,
+            "avg_words": (total_words / total_speeches) if total_speeches else None,
+            "avg_wpm": avg_wpm,
+        }
+
+    return render_template(
+        "member_speeches.html",
+        current_lthing=lthing,
+        member=member,
+        member_id=member_id,
+        summary=summary,
+        speeches=[speech_item(s) for s in speech_rows],
+        limit=limit,
         error=None,
     )
 
@@ -1882,6 +2467,7 @@ def agenda():
         mal_rows = session.execute(select(models.ThingmalalistiMal)).scalars().all()
         docs = session.execute(select(IssueDocument)).scalars().all() if manual_models and hasattr(manual_models, "IssueDocument") else []
         votes = session.execute(select(models.AtkvaedagreidslurAtkvaedagreidsla)).scalars().all()
+        minister_map = _minister_map(session, current_lthing(session))
 
     docs_by_mal: Dict[tuple, List[Any]] = defaultdict(list)
     for d in docs:
@@ -1944,6 +2530,7 @@ def agenda():
     cache_dir = _cache_dir()
     speeches_by_mal: Dict[tuple, List[Dict[str, Any]]] = defaultdict(list)
     issue_meta_cache: Dict[str, list] = {}
+    name_to_id = {name: info["id"] for name, info in minister_map.items()}
     for item in agenda_items:
         issue = item.get("issue")
         speeches: List[Dict[str, Any]] = []
@@ -1963,7 +2550,7 @@ def agenda():
                     path.write_text(resp.text, encoding="utf-8")
                 except Exception:
                     continue
-            speeches = _cached_speeches(src, cache_dir, issue_meta_cache, None)
+            speeches = _cached_speeches(src, cache_dir, issue_meta_cache, None, name_to_member_id=name_to_id)
             if speeches:
                 break
         speeches_by_mal[(item["malnr"], item["malflokkur"])] = speeches

@@ -10,7 +10,7 @@
 
 <section class="stack">
     {% for nefnd in committees %}
-        <article class="panel">
+        <article class="panel" id="nefnd-{{ nefnd.attr_id }}">
             <header class="panel-head">
                 <div>
                     <p class="eyebrow">Nefnd {{ nefnd.attr_id }}</p>
@@ -32,7 +32,12 @@
                         {% for m in mems %}
                             {% set att = attendance_by_nm.get((nefnd.attr_id, m.member_id)) %}
                             <li>
-                                {{ m.name }}{% if m.role %} · {{ m.role }}{% endif %}
+                                {% if m.member_id %}
+                                    <a href="{{ url_for('main.member_detail', member_id=m.member_id) }}">{{ m.name }}</a>
+                                {% else %}
+                                    {{ m.name }}
+                                {% endif %}
+                                {% if m.role %} · {{ m.role }}{% endif %}
                                 {% if att %}
                                     <span class="muted"> (Mæting: {{ att.attended }}/{{ att.total }})</span>
                                 {% endif %}

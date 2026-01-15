@@ -59,11 +59,12 @@
                     <li>
                       <div class="row speech-row">
                         <strong>
-                          {% if rd.html %}
-                            <a class="title-link" href="{{ rd.html }}">{{ rd.speaker }}</a>
+                          {% if rd.speaker_id %}
+                            <a class="title-link" href="{{ url_for('main.member_detail', member_id=rd.speaker_id|int) }}">{{ rd.speaker }}</a>
                           {% else %}
                             {{ rd.speaker }}
                           {% endif %}
+                          {% if rd.html %}<a class="muted" href="{{ rd.html }}">Lesa</a>{% endif %}
                           {% set has_role = rd.role %}
                           {% set has_party = rd.party and rd.party != rd.role %}
                           {% if has_role or has_party %}
@@ -88,11 +89,12 @@
                               <li class="muted">
                                 <div class="row speech-row">
                                   <span>
-                                    {% if a.html %}
-                                      <a class="title-link" href="{{ a.html }}">{{ a.speaker }}</a>
+                                    {% if a.speaker_id %}
+                                      <a class="title-link" href="{{ url_for('main.member_detail', member_id=a.speaker_id|int) }}">{{ a.speaker }}</a>
                                     {% else %}
                                       {{ a.speaker }}
                                     {% endif %}
+                                    {% if a.html %}<a class="muted" href="{{ a.html }}">Lesa</a>{% endif %}
                                     {% set has_role = a.role %}
                                     {% set has_party = a.party and a.party != a.role %}
                                     {% if has_role or has_party %}

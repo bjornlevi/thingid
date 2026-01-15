@@ -26,6 +26,8 @@ import sys
 import time
 import re
 import unicodedata
+from html import unescape
+from html.parser import HTMLParser
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -742,8 +744,8 @@ def member_id_from_url(nanar_url: Optional[str]) -> Optional[int]:
 def speech_text_from_xml(detail_xml: ET.Element) -> str:
     text_node = None
     for node in detail_xml.iter():
-        tag_plain = unicodedata.normalize("NFKD", strip_ns(node.tag)).encode("ascii", "ignore").decode("ascii").lower()
-        if tag_plain == "raedutexti":
+        tag_plain = strip_ns(node.tag).lower()
+        if tag_plain in ("ræðutexti", "raedutexti"):
             text_node = node
             break
     if text_node is None:
@@ -758,6 +760,24 @@ def speech_text_from_xml(detail_xml: ET.Element) -> str:
     if not paras:
         return " ".join(t.strip() for t in text_node.itertext() if (t or "").strip())
     return "\n".join(paras)
+
+
+class _TextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: List[str] = []
+
+    def handle_data(self, data: str) -> None:
+        if data:
+            text = data.strip()
+            if text:
+                self.parts.append(text)
+
+
+def speech_text_from_html(content: bytes) -> str:
+    parser = _TextExtractor()
+    parser.feed(unescape(content.decode("utf-8", errors="replace")))
+    return "\n".join(parser.parts)
 
 
 def populate_speeches(
@@ -789,13 +809,22 @@ def populate_speeches(
     if max_records is not None:
         rows = rows[:max_records]
     for idx, row in enumerate(rows):
+        if getattr(row, "leaf_raedumadur_forsetialthingis", None):
+            # Skip speeches delivered in the role of President of Althingi.
+            continue
         xml_url = getattr(row, "leaf_slodir_xml", None) or getattr(row, "leaf_slodir_html", None)
         speech_key = speech_id_from_url(xml_url) or getattr(row, "leaf_raedahofst", None) or f"speech-{idx}"
         if not xml_url:
             continue
         try:
-            detail_root = parse_xml(fetcher.get(xml_url), xml_url)
-            speech_text = speech_text_from_xml(detail_root)
+            content = fetcher.get(xml_url)
+            detail_root = None
+            speech_text = ""
+            if xml_url.lower().endswith(".xml") or content.lstrip().startswith(b"<?xml"):
+                detail_root = parse_xml(content, xml_url)
+                speech_text = speech_text_from_xml(detail_root)
+            else:
+                speech_text = speech_text_from_html(content)
         except Exception as e:
             print(f"[warn] failed to fetch speech xml {xml_url}: {e}")
             speech_text = ""
@@ -814,6 +843,10 @@ def populate_speeches(
         wpm = None
         if duration_seconds and duration_seconds > 0 and wc:
             wpm = wc / (duration_seconds / 60.0)
+        if wpm and wpm > 300:
+            # Drop suspiciously high speeds that usually indicate bad timestamps.
+            duration_seconds = None
+            wpm = None
         m_id = member_id_from_url(getattr(row, "leaf_raedumadur_nanar", None))
         speeches.append(Speech(
             lthing=lthing,
