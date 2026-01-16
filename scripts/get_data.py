@@ -1525,10 +1525,9 @@ def main() -> int:
                 if name == "þingmálalisti" and manual_models and hasattr(manual_models, "IssueDocument"):
                     issue_documents = []
                     IssueDocModel = manual_models.IssueDocument
-                    # clear previous for this lthing
                     execute_with_retry(session, text('DELETE FROM issue_documents WHERE lthing=:lt'), {"lt": lthing})
                     session.flush()
-                    seen_issue_keys: set[tuple] = set()
+                    seen_issue_docs: set[Tuple[int, int, Optional[int]]] = set()
                     for parent in parents:
                         detail_url = getattr(parent, r["leaf_map"].get("xml"), None) if r.get("leaf_map") else None
                         malnr = getattr(parent, r["attr_map"].get("málsnúmer"), None) if r.get("attr_map") else None
@@ -1536,17 +1535,21 @@ def main() -> int:
                             continue
                         try:
                             detail_xml = parse_xml(fetcher.get(detail_url), detail_url)
-                            docs = parse_issue_documents(detail_xml, getattr(parent, r["attr_map"].get("málsflokkur"), None) if r.get("attr_map") else None)
+                            docs = parse_issue_documents(
+                                detail_xml,
+                                getattr(parent, r["attr_map"].get("málsflokkur"), None) if r.get("attr_map") else None,
+                            )
                             for d in docs:
-                                key = (lthing, malnr, d.get("skjalnr"))
-                                if key in seen_issue_keys:
+                                skjalnr = d.get("skjalnr")
+                                key = (lthing, int(malnr), skjalnr if skjalnr is None else int(skjalnr))
+                                if key in seen_issue_docs:
                                     continue
-                                seen_issue_keys.add(key)
+                                seen_issue_docs.add(key)
                                 issue_documents.append(IssueDocModel(
                                     lthing=lthing,
                                     malnr=malnr,
                                     malflokkur=d.get("malflokkur"),
-                                    skjalnr=d.get("skjalnr"),
+                                    skjalnr=skjalnr,
                                     skjalategund=d.get("skjalategund"),
                                     utbyting=d.get("utbyting"),
                                     slod_html=d.get("slod_html"),
@@ -1559,14 +1562,18 @@ def main() -> int:
                         session.add_all(issue_documents)
                         commit_with_retry(session)
                         print(f"[ok] þingmálalisti: stored {len(issue_documents)} issue_documents")
+
                 if name == "atkvæðagreiðslur" and vote_details_to_add:
                     session.add_all(vote_details_to_add)
                     commit_with_retry(session)
                     print(f"[ok] atkvæðagreiðslur: stored {len(vote_details_to_add)} vote_details")
+                    vote_details_to_add.clear()
+
                 if name == "þingmannalisti" and seats_to_add:
                     session.add_all(seats_to_add)
                     commit_with_retry(session)
                     print(f"[ok] þingmannalisti: stored {len(seats_to_add)} member seats")
+                    seats_to_add.clear()
     
     # Extra: cache nefndarfundir + fundargerðir for this þing to support attendance parsing
     if args.cache_dir and not args.speeches_only:
