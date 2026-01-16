@@ -360,6 +360,7 @@ details[open] summary { color: var(--accent); }
 
 .panel summary { font-size: 1.05rem; }
 .panel-body { margin-top: 0.35rem; }
+details.panel { width: 100%; }
 
 .member-meta .pill { margin-top: 0.15rem; display: inline-flex; }
 .member-id img {
@@ -373,8 +374,9 @@ details[open] summary { color: var(--accent); }
 .member-meta { display: flex; flex-direction: column; gap: 0.15rem; }
 .member-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: 0.75rem;
+    width: 100%;
 }
 .member-card {
     border: 1px solid var(--border);
