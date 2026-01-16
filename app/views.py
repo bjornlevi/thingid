@@ -1425,13 +1425,13 @@ def _fundargerd_link(raw_xml: str) -> Optional[str]:
 def member_attendance(member_id: int):
     engine = _get_engine()
     with Session(engine) as session:
+        lthing = _selected_lthing(session)
         member = session.execute(
             select(models.ThingmannalistiThingmadur).where(
                 models.ThingmannalistiThingmadur.attr_id == member_id,
                 models.ThingmannalistiThingmadur.ingest_lthing == lthing,
             )
         ).scalar_one_or_none()
-        lthing = _selected_lthing(session)
         if member is None:
             return render_template(
                 "member_attendance.html",
