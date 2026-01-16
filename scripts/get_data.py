@@ -316,7 +316,7 @@ def unique_constraint_columns(model: Any) -> List[List[str]]:
     return cols
 
 
-def execute_with_retry(session: Session, stmt: Any, params: Optional[Dict[str, Any]] = None, retries: int = 5, delay: float = 1.5) -> None:
+def execute_with_retry(session: Session, stmt: Any, params: Optional[Dict[str, Any]] = None, retries: int = 10, delay: float = 2.0) -> None:
     """Execute a SQL statement with simple retry on SQLite 'database is locked' errors."""
     for attempt in range(retries):
         try:
@@ -328,11 +328,12 @@ def execute_with_retry(session: Session, stmt: Any, params: Optional[Dict[str, A
                 if attempt + 1 == retries:
                     raise
                 time.sleep(delay)
+                delay *= 1.2
                 continue
             raise
 
 
-def commit_with_retry(session: Session, retries: int = 5, delay: float = 1.5) -> None:
+def commit_with_retry(session: Session, retries: int = 10, delay: float = 2.0) -> None:
     """Commit with retry on SQLite busy/locked errors."""
     for attempt in range(retries):
         try:
@@ -345,6 +346,7 @@ def commit_with_retry(session: Session, retries: int = 5, delay: float = 1.5) ->
                 if attempt + 1 == retries:
                     raise
                 time.sleep(delay)
+                delay *= 1.2
                 continue
             raise
 
@@ -668,6 +670,7 @@ def compute_issue_metrics(
                 first_doc_date[int(d.malnr)] = utb_dt
 
     metrics: List[Any] = []
+    seen_keys: set[tuple] = set()
     for issue in issues:
         if getattr(issue, "attr_malsflokkur", None) != "A":
             continue
@@ -675,6 +678,9 @@ def compute_issue_metrics(
         if typ != WRITTEN_QUESTION_LABEL.casefold():
             continue
         key = int(issue.attr_malsnumer)
+        dedupe_key = (lthing, key)
+        if dedupe_key in seen_keys:
+            continue
         question_dt = None
         answer_dt = None
         for doc in docs_by_mal.get(key, []):
@@ -697,6 +703,7 @@ def compute_issue_metrics(
         latency = None
         if question_dt:
             latency = business_days_between(question_dt, answer_dt or dt.date.today())
+        seen_keys.add(dedupe_key)
         metrics.append(metrics_model(
             lthing=lthing,
             malnr=key,
