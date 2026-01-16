@@ -597,10 +597,15 @@ def populate_committee_attendance(session: Session, cache_dir: Path, lthing: int
             session.flush()
             meeting_id = mt.id
             meetings_added += 1
+            seen_attendance: set[Tuple[int, int]] = set()
             for rec in attendance:
                 mid = rec.get("member_id")
                 if not mid:
                     continue
+                key = (meeting_id, int(mid))
+                if key in seen_attendance:
+                    continue
+                seen_attendance.add(key)
                 status = rec.get("status") or "present"
                 arrival_val = arrival_map.get(mid)
                 substitute_for = rec.get("substitute_for_member_id")
@@ -619,7 +624,7 @@ def populate_committee_attendance(session: Session, cache_dir: Path, lthing: int
                     counts[mid]["total"] += 1
                 elif status == "absent_notified":
                     counts[mid]["total"] += 1
-            session.commit()
+            commit_with_retry(session)
         except Exception as e:
             session.rollback()
             if len(parse_errors) < 5:
