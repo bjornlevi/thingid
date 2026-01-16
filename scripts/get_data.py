@@ -41,8 +41,9 @@ if str(ROOT_DIR) not in sys.path:
 
 import requests
 import xml.etree.ElementTree as ET
-from sqlalchemy import UniqueConstraint, create_engine, text, select
+from sqlalchemy import UniqueConstraint, create_engine, text, select, event
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
 
 from app.constants import WRITTEN_QUESTION_LABEL, ANSWER_STATUS_SVARAD, ANSWER_STATUS_OSVARAD
 from app.utils.dates import parse_date, business_days_between, prefer_athugasemd_date
@@ -86,6 +87,7 @@ class Fetcher:
         self.cache_dir = cache_dir
         self.max_age_hours = max_age_hours
         self.force = force
+        self.cache_only_default = False
         if self.cache_dir:
             os.makedirs(self.cache_dir, exist_ok=True)
 
@@ -95,11 +97,13 @@ class Fetcher:
         safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", url)
         return os.path.join(self.cache_dir, safe)
 
-    def get(self, url: str, retries: int = 4) -> bytes:
+    def get(self, url: str, retries: int = 4, cache_only: Optional[bool] = None) -> bytes:
         cache_path = self._cache_path(url)
+        if cache_only is None:
+            cache_only = self.cache_only_default
         if cache_path and not self.force and os.path.exists(cache_path):
             age_hours = (datetime.now() - datetime.fromtimestamp(os.path.getmtime(cache_path))).total_seconds() / 3600.0
-            if age_hours < self.max_age_hours:
+            if cache_only or age_hours < self.max_age_hours:
                 with open(cache_path, "rb") as f:
                     return f.read()
 
@@ -312,6 +316,39 @@ def unique_constraint_columns(model: Any) -> List[List[str]]:
     return cols
 
 
+def execute_with_retry(session: Session, stmt: Any, params: Optional[Dict[str, Any]] = None, retries: int = 5, delay: float = 1.5) -> None:
+    """Execute a SQL statement with simple retry on SQLite 'database is locked' errors."""
+    for attempt in range(retries):
+        try:
+            session.execute(stmt, params or {})
+            return
+        except OperationalError as e:
+            msg = str(e).lower()
+            if "database is locked" in msg or "database is busy" in msg:
+                if attempt + 1 == retries:
+                    raise
+                time.sleep(delay)
+                continue
+            raise
+
+
+def commit_with_retry(session: Session, retries: int = 5, delay: float = 1.5) -> None:
+    """Commit with retry on SQLite busy/locked errors."""
+    for attempt in range(retries):
+        try:
+            session.commit()
+            return
+        except OperationalError as e:
+            msg = str(e).lower()
+            if "database is locked" in msg or "database is busy" in msg:
+                session.rollback()
+                if attempt + 1 == retries:
+                    raise
+                time.sleep(delay)
+                continue
+            raise
+
+
 def cache_nefndarfundir(fetcher: Fetcher, lthing: int) -> None:
     """
     Fetch nefndarfundir list and cache each fundargerð XML/HTML using the existing fetcher cache.
@@ -456,7 +493,7 @@ def populate_vote_sessions_and_attendance(session: Session, lthing: int, manual_
     if not manual_models or not hasattr(manual_models, "VoteSession"):
         return counts
     VoteSession = manual_models.VoteSession
-    session.execute(text('DELETE FROM vote_session WHERE lthing=:lt'), {"lt": lthing})
+    execute_with_retry(session, text('DELETE FROM vote_session WHERE lthing=:lt'), {"lt": lthing})
     session.flush()
     rows = session.execute(text("SELECT attr_atkvaedagreidslunumer, leaf_timi FROM atkvaedagreidslur__atkvaedagreidsla")).fetchall()
     seen_vote_nums = set()
@@ -465,7 +502,7 @@ def populate_vote_sessions_and_attendance(session: Session, lthing: int, manual_
             continue
         seen_vote_nums.add(vote_num)
         session.add(VoteSession(lthing=lthing, vote_num=vote_num, time=leaf_timi))
-    session.commit()
+    commit_with_retry(session)
 
     # Build voter attendance counts from vote_details already stored
     rows = session.execute(
@@ -584,6 +621,7 @@ def populate_committee_attendance(session: Session, cache_dir: Path, lthing: int
                     counts[mid]["total"] += 1
             session.commit()
         except Exception as e:
+            session.rollback()
             if len(parse_errors) < 5:
                 parse_errors.append((str(fp), str(e)))
             continue
@@ -844,13 +882,14 @@ def populate_speeches(
     # Clear existing rows for this lthing to avoid stale data
     try:
         session.execute(text("DELETE FROM speech WHERE lthing=:lt"), {"lt": lthing})
-        session.commit()
+        commit_with_retry(session)
     except Exception:
         session.rollback()
     speeches: List[Any] = []
     rows = session.execute(
         select(Raedulisti).where(Raedulisti.ingest_lthing == lthing)
     ).scalars().all()
+    seen_speech_ids: set[tuple] = set()
     if max_records is not None:
         rows = rows[:max_records]
     for idx, row in enumerate(rows):
@@ -861,6 +900,10 @@ def populate_speeches(
         speech_key = speech_id_from_url(xml_url) or getattr(row, "leaf_raedahofst", None) or f"speech-{idx}"
         if not xml_url:
             continue
+        key_tuple = (lthing, speech_key)
+        if key_tuple in seen_speech_ids:
+            continue
+        seen_speech_ids.add(key_tuple)
         try:
             content = fetcher.get(xml_url)
             detail_root = None
@@ -919,11 +962,11 @@ def populate_speeches(
         ))
         if len(speeches) % 200 == 0 and speeches:
             session.add_all(speeches)
-            session.commit()
+            commit_with_retry(session)
             speeches = []
     if speeches:
         session.add_all(speeches)
-        session.commit()
+        commit_with_retry(session)
     total = session.execute(text("SELECT COUNT(*) FROM speech WHERE lthing=:lt"), {"lt": lthing}).scalar_one_or_none() or 0
     print(f"[ok] speeches: stored {total} rows for lthing {lthing}")
     return total
@@ -1123,7 +1166,17 @@ def main() -> int:
     except ModuleNotFoundError:
         manual_models = None
 
-    engine = create_engine(f"sqlite:///{db_path}", future=True)
+    engine = create_engine(f"sqlite:///{db_path}", future=True, connect_args={"timeout": 60})
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_connection, connection_record):
+        try:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA busy_timeout=60000")
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.close()
+        except Exception:
+            pass
     Base.metadata.create_all(engine)
     if manual_models and hasattr(manual_models, "Base"):
         manual_models.Base.metadata.create_all(engine)
@@ -1131,6 +1184,7 @@ def main() -> int:
     fetcher = Fetcher(sleep_s=args.sleep, cache_dir=args.cache_dir, force=args.force_fetch)
     detail_cache: Dict[str, List[Tuple[int, str]]] = {}
     fetched_at = now_utc_iso()
+    current_lthing_now, _ = discover_current_lthing_and_yfirlit(fetcher)
 
     def resource_urls_for_lthing(base_resources: List[Dict[str, Any]], lthing_val: int, yfirlit_urls: Dict[str, str]) -> List[Dict[str, Any]]:
         out = []
@@ -1170,6 +1224,7 @@ def main() -> int:
         seats_to_add: List[Any] = []
         for lthing, yfirlit in targets:
             print(f"[info] fetching lthing {lthing}")
+            fetcher.cache_only_default = (lthing != current_lthing_now and not args.force_fetch)
             scoped_resources = resource_urls_for_lthing(resources, lthing, yfirlit)
             for r in scoped_resources:
                 if "error" in r:
@@ -1191,14 +1246,14 @@ def main() -> int:
                     records = records[:args.max_records]
     
                 # Refresh this resource for this session
-                session.execute(text(f'DELETE FROM "{table}" WHERE ingest_lthing=:lt AND ingest_resource=:res'),
-                                {"lt": lthing, "res": name})
-    
+                execute_with_retry(session, text(f'DELETE FROM "{table}" WHERE ingest_lthing=:lt AND ingest_resource=:res'),
+                                   {"lt": lthing, "res": name})
+
                 # Also clear child tables
                 for ct in r.get("child_tables", []):
                     ctable = ct["table"]
-                    session.execute(text(f'DELETE FROM "{ctable}" WHERE ingest_lthing=:lt AND ingest_resource=:res'),
-                                    {"lt": lthing, "res": name})
+                    execute_with_retry(session, text(f'DELETE FROM "{ctable}" WHERE ingest_lthing=:lt AND ingest_resource=:res'),
+                                       {"lt": lthing, "res": name})
     
                 session.flush()
     
@@ -1348,7 +1403,7 @@ def main() -> int:
                 # Extra: fetch and store member seats (party/type) for þingmenn
                 if name == "þingmannalisti" and manual_models and hasattr(manual_models, "MemberSeat"):
                     MemberSeat = manual_models.MemberSeat
-                    session.execute(text('DELETE FROM member_seat WHERE lthing=:lt'), {"lt": lthing})
+                    execute_with_retry(session, text('DELETE FROM member_seat WHERE lthing=:lt'), {"lt": lthing})
                     session.flush()
                     thingseta_col = leaf_map.get("xml/þingseta")
                     for parent in parents:
@@ -1382,7 +1437,7 @@ def main() -> int:
                 # Extra: fetch nefndarmenn for each nefnd
                 if name == "nefndir" and manual_models and hasattr(manual_models, "NefndMember"):
                     NefndMember = manual_models.NefndMember
-                    session.execute(text('DELETE FROM nefnd_member WHERE lthing=:lt'), {"lt": lthing})
+                    execute_with_retry(session, text('DELETE FROM nefnd_member WHERE lthing=:lt'), {"lt": lthing})
                     session.flush()
                     nefndarmenn_url = None
                     if parents and leaf_map:
@@ -1420,11 +1475,11 @@ def main() -> int:
                                     print(f"[ok] nefnd {nefnd_id_int}: stored {len(entries)} nefndarmenn")
                             if nefnd_rows:
                                 session.add_all(nefnd_rows)
-                                session.commit()
+                                commit_with_retry(session)
                         except Exception as e:
                             print(f"[warn] failed to fetch aggregated nefndarmenn: {e}")
     
-                session.commit()
+                commit_with_retry(session)
                 inserted = len(records) - skipped_dupes
                 print(f"[ok] {name}: inserted {inserted} rows into {table} ({skipped_dupes} skipped as duplicates)")
                 # If we just processed þingmálalisti, collect issue documents from detail XMLs
@@ -1432,8 +1487,9 @@ def main() -> int:
                     issue_documents = []
                     IssueDocModel = manual_models.IssueDocument
                     # clear previous for this lthing
-                    session.execute(text('DELETE FROM issue_documents WHERE lthing=:lt'), {"lt": lthing})
+                    execute_with_retry(session, text('DELETE FROM issue_documents WHERE lthing=:lt'), {"lt": lthing})
                     session.flush()
+                    seen_issue_keys: set[tuple] = set()
                     for parent in parents:
                         detail_url = getattr(parent, r["leaf_map"].get("xml"), None) if r.get("leaf_map") else None
                         malnr = getattr(parent, r["attr_map"].get("málsnúmer"), None) if r.get("attr_map") else None
@@ -1443,6 +1499,10 @@ def main() -> int:
                             detail_xml = parse_xml(fetcher.get(detail_url), detail_url)
                             docs = parse_issue_documents(detail_xml, getattr(parent, r["attr_map"].get("málsflokkur"), None) if r.get("attr_map") else None)
                             for d in docs:
+                                key = (lthing, malnr, d.get("skjalnr"))
+                                if key in seen_issue_keys:
+                                    continue
+                                seen_issue_keys.add(key)
                                 issue_documents.append(IssueDocModel(
                                     lthing=lthing,
                                     malnr=malnr,
@@ -1458,15 +1518,15 @@ def main() -> int:
                             print(f"[warn] failed to fetch þingskjöl for mál {malnr}: {e}")
                     if issue_documents:
                         session.add_all(issue_documents)
-                        session.commit()
+                        commit_with_retry(session)
                         print(f"[ok] þingmálalisti: stored {len(issue_documents)} issue_documents")
                 if name == "atkvæðagreiðslur" and vote_details_to_add:
                     session.add_all(vote_details_to_add)
-                    session.commit()
+                    commit_with_retry(session)
                     print(f"[ok] atkvæðagreiðslur: stored {len(vote_details_to_add)} vote_details")
                 if name == "þingmannalisti" and seats_to_add:
                     session.add_all(seats_to_add)
-                    session.commit()
+                    commit_with_retry(session)
                     print(f"[ok] þingmannalisti: stored {len(seats_to_add)} member seats")
     
     # Extra: cache nefndarfundir + fundargerðir for this þing to support attendance parsing
@@ -1493,7 +1553,7 @@ def main() -> int:
                     # derived issue metrics (answer status/latency) for written questions
                     if hasattr(manual_models, "IssueMetrics") and hasattr(manual_models, "IssueDocument"):
                         try:
-                            session.execute(text("DELETE FROM issue_metrics WHERE lthing=:lt"), {"lt": lthing})
+                            execute_with_retry(session, text("DELETE FROM issue_metrics WHERE lthing=:lt"), {"lt": lthing})
                             issue_rows = session.execute(
                                 select(models.ThingmalalistiMal).where(models.ThingmalalistiMal.ingest_lthing == lthing)
                             ).scalars().all()
@@ -1514,7 +1574,7 @@ def main() -> int:
                             metrics = compute_issue_metrics(lthing, issue_docs, issue_rows, ath_map, manual_models)
                             if metrics:
                                 session.add_all(metrics)
-                            session.commit()
+                            commit_with_retry(session)
                             print(f"[ok] issue_metrics: stored {len(metrics)} rows")
                         except Exception as e:
                             session.rollback()
