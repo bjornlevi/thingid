@@ -24,5 +24,15 @@ get_data:
 		$(PYTHON) scripts/get_data.py --db $(DB) --schema $(SCHEMA) --models-dir $(MODELS_DIR); \
 	fi
 
+get_cache:
+	@mkdir -p data/cache
+	@if [ "$(thing)" = "all" ]; then \
+		$(PYTHON) scripts/get_cache.py --schema $(SCHEMA) --cache-dir data/cache --all-lthing; \
+	elif [ -n "$(thing)" ]; then \
+		$(PYTHON) scripts/get_cache.py --schema $(SCHEMA) --cache-dir data/cache --lthing $(thing); \
+	else \
+		$(PYTHON) scripts/get_cache.py --schema $(SCHEMA) --cache-dir data/cache; \
+	fi
+
 web:
 	FLASK_APP=$(FLASK_APP) FLASK_ENV=$(FLASK_ENV) APP_URL_PREFIX="$(APP_URL_PREFIX)" THINGID_PREFIX="$(THINGID_PREFIX)" $(PYTHON) -m flask run
