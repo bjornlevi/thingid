@@ -1169,6 +1169,8 @@ def main() -> int:
         args.reset_db = False
     if args.all_lthing:
         args.reset_db = False
+    if args.lthing is not None:
+        args.reset_db = False
 
     # Ensure DB directory exists and reset if requested
     db_path = os.path.abspath(args.db)
