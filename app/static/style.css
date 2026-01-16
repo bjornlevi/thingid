@@ -134,6 +134,19 @@ details[open] summary { color: var(--accent); }
     flex-wrap: wrap;
     margin: 0.5rem 0 1rem;
 }
+.filter-label {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+}
+.filter-select {
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 0.35rem 0.75rem;
+}
 .filter-pill {
     cursor: pointer;
     color: inherit;

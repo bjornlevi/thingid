@@ -30,7 +30,7 @@
                 </div>
                 <div class="metric-card">
                     <div class="metric-label">Meðalorð á ræðu</div>
-                    <div class="metric-value">{{ summary.avg_words|default(0)|round(0) }}</div>
+                <div class="metric-value">{{ summary.avg_words|default(0, true)|round(0) }}</div>
                 </div>
                 <div class="metric-card">
                     <div class="metric-label">Meðalhraði (orð/mín)</div>

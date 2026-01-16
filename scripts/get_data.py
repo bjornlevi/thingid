@@ -1573,6 +1573,7 @@ def main() -> int:
                     commit_with_retry(session)
                     print(f"[ok] þingmannalisti: stored {len(seats_to_add)} member seats")
                     seats_to_add.clear()
+
     
     # Extra: cache nefndarfundir + fundargerðir for this þing to support attendance parsing
     if args.cache_dir and not args.speeches_only:

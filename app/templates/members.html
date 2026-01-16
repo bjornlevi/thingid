@@ -12,8 +12,17 @@
     {% if error %}
         <p class="text-danger">{{ error }}</p>
     {% endif %}
+    <div class="filter-row">
+        <label class="filter-label" for="party-filter">Þingflokkur</label>
+        <select id="party-filter" class="filter-select">
+            <option value="">Allir flokkar</option>
+            {% for party, members in parties.items() %}
+                <option value="{{ party }}">{{ party }} ({{ members|length }})</option>
+            {% endfor %}
+        </select>
+    </div>
     {% for party, members in parties.items() %}
-        <details class="panel" open>
+        <details class="panel party-panel" data-party="{{ party }}" open>
             <summary>{{ party }}</summary>
             <div class="panel-body">
                 <div class="member-grid">
@@ -84,4 +93,5 @@
         </details>
     {% endfor %}
 </section>
+<script src="{{ url_for('static', filename='js/members_filter.js') }}"></script>
 {% endblock %}

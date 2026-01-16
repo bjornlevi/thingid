@@ -473,6 +473,18 @@ def index():
         seats = session.execute(
             select(MemberSeat).where(MemberSeat.lthing == lthing)
         ).scalars().all()
+        display_seats = seats
+        if not display_seats:
+            try:
+                fallback_lthing = session.execute(
+                    select(func.max(MemberSeat.lthing))
+                ).scalar_one_or_none()
+                if fallback_lthing and fallback_lthing != lthing:
+                    display_seats = session.execute(
+                        select(MemberSeat).where(MemberSeat.lthing == fallback_lthing)
+                    ).scalars().all()
+            except Exception:
+                display_seats = seats
 
         votes = session.execute(
             select(models.AtkvaedagreidslurAtkvaedagreidsla)
@@ -557,7 +569,7 @@ def index():
 
     # map member id -> party name for display with speeches
     seat_by_member: Dict[int, MemberSeat] = {}
-    for seat in seats:
+    for seat in display_seats:
         if seat.member_id is None:
             continue
         try:
@@ -1064,7 +1076,7 @@ def members():
     def party_for_member(m):
         if getattr(m, "current_seat", None) and m.current_seat.party_name:
             return m.current_seat.party_name
-        return m.leaf_skammstofun or "Óflokkað"
+        return "Óflokkaðir"
 
     parties: Dict[str, List[Any]] = defaultdict(list)
     for p in people:
