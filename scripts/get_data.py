@@ -1562,7 +1562,6 @@ def main() -> int:
                         session.add_all(issue_documents)
                         commit_with_retry(session)
                         print(f"[ok] þingmálalisti: stored {len(issue_documents)} issue_documents")
-
                 if name == "atkvæðagreiðslur" and vote_details_to_add:
                     session.add_all(vote_details_to_add)
                     commit_with_retry(session)
