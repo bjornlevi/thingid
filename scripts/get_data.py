@@ -1140,6 +1140,7 @@ def main() -> int:
     ap.add_argument("--speeches-only", action="store_true", help="Only refresh raedur (skip other resources; keeps existing DB)")
     ap.add_argument("--skip-speeches", action="store_true", help="Skip fetching individual raedur XML documents")
     ap.add_argument("--lthing", type=int, default=None, help="Fetch a specific löggjafarþing number")
+    ap.add_argument("--lthing-range", type=str, default=None, help="Inclusive range start,end (e.g. 122,145)")
     ap.add_argument("--all-lthing", action="store_true", help="Fetch all löggjafarþing sessions (uses existing DB)")
     args = ap.parse_args()
 
@@ -1148,6 +1149,17 @@ def main() -> int:
         schema_map = json.load(f)
 
     resources = schema_map.get("resources", [])
+    range_targets: List[int] = []
+    if args.lthing_range:
+        try:
+            start_s, end_s = args.lthing_range.split(",", 1)
+            start_i = int(start_s.strip())
+            end_i = int(end_s.strip())
+            lo, hi = sorted((start_i, end_i))
+            range_targets = list(range(lo, hi + 1))
+        except Exception as e:
+            raise SystemExit(f"Invalid --lthing-range '{args.lthing_range}': {e}") from e
+
     if args.speeches_only:
         resources = [r for r in resources if r.get("table") == "raedulisti__raeda"]
         if not resources:
@@ -1193,7 +1205,8 @@ def main() -> int:
     if manual_models and hasattr(manual_models, "Base"):
         manual_models.Base.metadata.create_all(engine)
 
-    fetcher = Fetcher(sleep_s=args.sleep, cache_dir=args.cache_dir, force=args.force_fetch)
+    base_cache_dir = Path(args.cache_dir) if args.cache_dir else None
+    fetcher = Fetcher(sleep_s=args.sleep, cache_dir=str(base_cache_dir) if base_cache_dir else None, force=args.force_fetch)
     detail_cache: Dict[str, List[Tuple[int, str]]] = {}
     fetched_at = now_utc_iso()
     current_lthing_now, _ = discover_current_lthing_and_yfirlit(fetcher)
@@ -1215,6 +1228,14 @@ def main() -> int:
     if args.all_lthing:
         sessions = list_lthing_sessions(fetcher)
         targets = [(n, y) for n, y in sessions if y]
+    elif range_targets:
+        targets = []
+        for lt_val in range_targets:
+            try:
+                lt, y = discover_lthing_and_yfirlit(fetcher, lt_val)
+                targets.append((lt, y))
+            except Exception as e:
+                print(f"[warn] skipping lthing {lt_val}: {e}")
     elif args.lthing is not None:
         lt, y = discover_lthing_and_yfirlit(fetcher, args.lthing)
         targets = [(lt, y)]
@@ -1237,6 +1258,10 @@ def main() -> int:
         for lthing, yfirlit in targets:
             print(f"[info] fetching lthing {lthing}")
             fetcher.cache_only_default = (lthing != current_lthing_now and not args.force_fetch)
+            if base_cache_dir:
+                cache_dir_for_lt = base_cache_dir / str(lthing)
+                cache_dir_for_lt.mkdir(parents=True, exist_ok=True)
+                fetcher.cache_dir = str(cache_dir_for_lt)
             scoped_resources = resource_urls_for_lthing(resources, lthing, yfirlit)
             for r in scoped_resources:
                 if "error" in r:

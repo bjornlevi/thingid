@@ -16,7 +16,9 @@ check_data:
 
 get_data:
 	@mkdir -p $(dir $(DB))
-	@if [ "$(thing)" = "all" ]; then \
+	@if echo "$(thing)" | grep -q ',' ; then \
+		$(PYTHON) scripts/get_data.py --db $(DB) --schema $(SCHEMA) --models-dir $(MODELS_DIR) --lthing-range $(thing); \
+	elif [ "$(thing)" = "all" ]; then \
 		$(PYTHON) scripts/get_data.py --db $(DB) --schema $(SCHEMA) --models-dir $(MODELS_DIR) --all-lthing; \
 	elif [ -n "$(thing)" ]; then \
 		$(PYTHON) scripts/get_data.py --db $(DB) --schema $(SCHEMA) --models-dir $(MODELS_DIR) --lthing $(thing); \
@@ -26,7 +28,9 @@ get_data:
 
 get_cache:
 	@mkdir -p data/cache
-	@if [ "$(thing)" = "all" ]; then \
+	@if echo "$(thing)" | grep -q ',' ; then \
+		$(PYTHON) scripts/get_cache.py --schema $(SCHEMA) --cache-dir data/cache --lthing-range $(thing); \
+	elif [ "$(thing)" = "all" ]; then \
 		$(PYTHON) scripts/get_cache.py --schema $(SCHEMA) --cache-dir data/cache --all-lthing; \
 	elif [ -n "$(thing)" ]; then \
 		$(PYTHON) scripts/get_cache.py --schema $(SCHEMA) --cache-dir data/cache --lthing $(thing); \

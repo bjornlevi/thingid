@@ -5,6 +5,7 @@ Download and cache Althingi XML resources without touching the database.
 Usage:
   PYTHON=.venv/bin/python scripts/get_cache.py --cache-dir data/cache          # current þing
   PYTHON=.venv/bin.python scripts/get_cache.py --cache-dir data/cache --lthing 154
+  PYTHON=.venv/bin.python scripts/get_cache.py --cache-dir data/cache --lthing-range 120,145
   PYTHON=.venv/bin/python scripts/get_cache.py --cache-dir data/cache --all-lthing
   Add --force-fetch to bypass existing cache.
 """
@@ -56,21 +57,41 @@ def main() -> int:
     ap.add_argument("--sleep", type=float, default=0.15, help="Sleep between requests")
     ap.add_argument("--force-fetch", action="store_true", help="Ignore cache and re-download")
     ap.add_argument("--lthing", type=int, default=None, help="Specific löggjafarþing number")
+    ap.add_argument("--lthing-range", type=str, default=None, help="Inclusive range start,end (e.g. 122,145)")
     ap.add_argument("--all-lthing", action="store_true", help="Fetch all löggjafarþing sessions")
     ap.add_argument("--cache-nefndir", action="store_true", help="Also cache nefndarfundir fundargerðir")
     args = ap.parse_args()
 
-    cache_dir = Path(args.cache_dir)
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    base_cache_dir = Path(args.cache_dir)
+    base_cache_dir.mkdir(parents=True, exist_ok=True)
 
     with open(args.schema, "r", encoding="utf-8") as f:
         schema_map = json.load(f)
     resources = schema_map.get("resources", [])
 
-    fetcher = Fetcher(sleep_s=args.sleep, cache_dir=str(cache_dir), force=args.force_fetch)
+    fetcher = Fetcher(sleep_s=args.sleep, cache_dir=str(base_cache_dir), force=args.force_fetch)
+
+    range_targets: List[int] = []
+    if args.lthing_range:
+        try:
+            start_s, end_s = args.lthing_range.split(",", 1)
+            start_i = int(start_s.strip())
+            end_i = int(end_s.strip())
+            lo, hi = sorted((start_i, end_i))
+            range_targets = list(range(lo, hi + 1))
+        except Exception as e:
+            raise SystemExit(f"Invalid --lthing-range '{args.lthing_range}': {e}") from e
 
     if args.all_lthing:
         targets = [(n, y) for n, y in list_lthing_sessions(fetcher) if y]
+    elif range_targets:
+        targets = []
+        for lt in range_targets:
+            try:
+                _, y = discover_lthing_and_yfirlit(fetcher, lt)
+                targets.append((lt, y))
+            except Exception as e:
+                print(f"[warn] skipping lthing {lt}: {e}")
     elif args.lthing is not None:
         lt, y = discover_lthing_and_yfirlit(fetcher, args.lthing)
         targets = [(lt, y)]
@@ -80,6 +101,9 @@ def main() -> int:
 
     for lthing, yfirlit in targets:
         print(f"[info] caching lthing {lthing}")
+        cache_dir_for_lt = base_cache_dir / str(lthing)
+        cache_dir_for_lt.mkdir(parents=True, exist_ok=True)
+        fetcher.cache_dir = str(cache_dir_for_lt)
         scoped_resources = resource_urls_for_lthing(resources, lthing, yfirlit)
         for r in scoped_resources:
             url = r.get("url")
