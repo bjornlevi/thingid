@@ -8,6 +8,7 @@ Usage:
   PYTHON=.venv/bin.python scripts/get_cache.py --cache-dir data/cache --lthing-range 120,145
   PYTHON=.venv/bin/python scripts/get_cache.py --cache-dir data/cache --all-lthing
   Add --force-fetch to bypass existing cache.
+  Prewarm of detail URLs is on by default; add --skip-prewarm-details to disable.
 """
 
 from __future__ import annotations
@@ -31,7 +32,12 @@ from scripts.get_data import (  # type: ignore
     cache_nefndarfundir,
     discover_current_lthing_and_yfirlit,
     discover_lthing_and_yfirlit,
+    iter_leaf_fields,
+    iter_records,
+    is_abs_url,
     list_lthing_sessions,
+    norm_url,
+    parse_xml,
 )
 
 
@@ -60,6 +66,7 @@ def main() -> int:
     ap.add_argument("--lthing-range", type=str, default=None, help="Inclusive range start,end (e.g. 122,145)")
     ap.add_argument("--all-lthing", action="store_true", help="Fetch all löggjafarþing sessions")
     ap.add_argument("--cache-nefndir", action="store_true", help="Also cache nefndarfundir fundargerðir")
+    ap.add_argument("--skip-prewarm-details", action="store_true", help="Skip fetching detail URLs referenced in list XMLs (slodir/xml, html, pdf, rss, hljod, etc.)")
     args = ap.parse_args()
 
     base_cache_dir = Path(args.cache_dir)
@@ -115,6 +122,44 @@ def main() -> int:
                 print(f"[ok] cached {name}")
             except Exception as e:
                 print(f"[warn] failed to cache {name}: {e}")
+            if (not args.skip_prewarm_details) and url:
+                detail_urls = []
+                try:
+                    xml_bytes = fetcher.get(url)
+                    root = parse_xml(xml_bytes, url)
+                    records = iter_records(root, r.get("record_path", ""))
+                    seen = set()
+                    allowed_suffixes = (".xml", ".pdf", ".rss", ".mp3", ".m3u")
+                    for rec in records:
+                        for _path, val in iter_leaf_fields(rec):
+                            if not val:
+                                continue
+                            if any(ch.isspace() for ch in val):
+                                continue
+                            full = norm_url(url, val.strip())
+                            if not full or not is_abs_url(full):
+                                continue
+                            lower_full = full.lower()
+                            if "?" not in full and not lower_full.endswith(allowed_suffixes):
+                                continue
+                            if ("/altext/" not in lower_full) and (not lower_full.endswith(allowed_suffixes)):
+                                continue
+                            if full in seen:
+                                continue
+                            seen.add(full)
+                    detail_urls = sorted(seen)
+                except Exception as e:
+                    print(f"[warn] detail discovery failed for {name}: {e}")
+                    detail_urls = []
+                fetched = 0
+                for du in detail_urls:
+                    try:
+                        fetcher.get(du)
+                        fetched += 1
+                    except Exception as e:
+                        print(f"[warn] failed detail fetch {du}: {e}")
+                if detail_urls:
+                    print(f"[ok] prewarmed {fetched}/{len(detail_urls)} detail files for {name}")
         if args.cache_nefndir:
             try:
                 cache_nefndarfundir(fetcher, lthing)

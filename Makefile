@@ -38,5 +38,28 @@ get_cache:
 		$(PYTHON) scripts/get_cache.py --schema $(SCHEMA) --cache-dir data/cache; \
 	fi
 
+mint_bronze:
+	@mkdir -p data/bronze
+	@if echo "$(thing)" | grep -q ',' ; then \
+		$(PYTHON) scripts/mint_bronze.py --schema $(SCHEMA) --cache-dir data/cache --outdir data/bronze --lthing-range $(thing); \
+	elif [ "$(thing)" = "all" ]; then \
+		$(PYTHON) scripts/mint_bronze.py --schema $(SCHEMA) --cache-dir data/cache --outdir data/bronze --all-lthing; \
+	elif [ -n "$(thing)" ]; then \
+		$(PYTHON) scripts/mint_bronze.py --schema $(SCHEMA) --cache-dir data/cache --outdir data/bronze --lthing $(thing); \
+	else \
+		$(PYTHON) scripts/mint_bronze.py --schema $(SCHEMA) --cache-dir data/cache --outdir data/bronze; \
+	fi
+
+mint_silver:
+	@if [ -z "$(thing)" ]; then \
+		echo "Specify thing=<n>, thing=a,b, or thing=all"; exit 1; \
+	elif [ "$(thing)" = "all" ]; then \
+		$(PYTHON) scripts/mint_silver.py --db $(DB) --models-dir $(MODELS_DIR) --bronze-dir data/bronze --all-lthing; \
+	elif echo "$(thing)" | grep -q ',' ; then \
+		$(PYTHON) scripts/mint_silver.py --db $(DB) --models-dir $(MODELS_DIR) --bronze-dir data/bronze --lthing-range $(thing); \
+	else \
+		$(PYTHON) scripts/mint_silver.py --db $(DB) --models-dir $(MODELS_DIR) --bronze-dir data/bronze --lthing $(thing); \
+	fi
+
 web:
 	FLASK_APP=$(FLASK_APP) FLASK_ENV=$(FLASK_ENV) APP_URL_PREFIX="$(APP_URL_PREFIX)" THINGID_PREFIX="$(THINGID_PREFIX)" $(PYTHON) -m flask run
