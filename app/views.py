@@ -1865,6 +1865,10 @@ def speeches():
         minister_map = _minister_map(session, lthing)
         minister_name_to_id = {name: info["id"] for name, info in minister_map.items()}
 
+        def _avatar_url(name: str) -> str:
+            safe = quote(name or "")
+            return f"https://ui-avatars.com/api/?name={safe}&background=4fd1c5&color=0b1021&bold=true"
+
         def speech_item(s):
             member = member_map.get(int(s.member_id)) if getattr(s, "member_id", None) is not None else None
             title = getattr(s, "issue_malsheiti", None) or getattr(s, "kind", None) or getattr(s, "umraeda", None)
@@ -1873,11 +1877,18 @@ def speeches():
                 name_key = (getattr(s, "speaker_name", None) or "").strip()
                 if name_key in minister_name_to_id:
                     member_id = minister_name_to_id[name_key]
+            display_name = getattr(member, "leaf_nafn", None) or getattr(s, "speaker_name", None) or "Ónafngreindur"
+            photo_url = None
+            if member_id is not None:
+                photo_url = f"https://www.althingi.is/myndir/mynd/thingmenn/{member_id}/org/mynd.jpg"
+            if not photo_url:
+                photo_url = _avatar_url(display_name)
             return {
                 "id": s.id,
                 "member_id": member_id,
-                "speaker": getattr(member, "leaf_nafn", None) or getattr(s, "speaker_name", None) or "Ónafngreindur",
+                "speaker": display_name,
                 "party": getattr(member, "leaf_skammstofun", None),
+                "photo": photo_url,
                 "words": getattr(s, "word_count", None),
                 "wpm": getattr(s, "words_per_minute", None),
                 "duration": _fmt_seconds(getattr(s, "duration_seconds", None)),
@@ -1918,10 +1929,13 @@ def speeches():
             if mid is None:
                 continue
             member = member_map.get(int(mid))
+            display_name = getattr(member, "leaf_nafn", None) or speaker_name or f"Þingmaður {mid}"
+            photo_url = f"https://www.althingi.is/myndir/mynd/thingmenn/{int(mid)}/org/mynd.jpg"
             member_stats.append({
                 "member_id": int(mid),
-                "name": getattr(member, "leaf_nafn", None) or speaker_name or f"Þingmaður {mid}",
+                "name": display_name,
                 "party": getattr(member, "leaf_skammstofun", None),
+                "photo": photo_url,
                 "count": count or 0,
                 "avg_words": avg_w or 0,
                 "avg_wpm": avg_wpm or 0,
