@@ -43,7 +43,10 @@ def icelandic_sort_key(s: Optional[str]) -> List[int]:
 def current_lthing(session: Session) -> Optional[int]:
     try:
         val = session.execute(
-            select(models.ThingmalalistiMal.attr_thingnumer).limit(1)
+            select(models.ThingmalalistiMal.attr_thingnumer)
+            .where(models.ThingmalalistiMal.attr_thingnumer.is_not(None))
+            .order_by(models.ThingmalalistiMal.attr_thingnumer.desc())
+            .limit(1)
         ).scalar_one_or_none()
         return int(val) if val is not None else None
     except Exception:
