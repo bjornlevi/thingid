@@ -32,7 +32,7 @@ from .utils.dates import (
     prefer_athugasemd_date,
 )
 from .manual_models import IssueDocument, VoteDetail, MemberSeat, NefndMember, attach_flutningsmenn
-from .constants import WRITTEN_QUESTION_LABEL, canonical_issue_type
+from .constants import WRITTEN_QUESTION_LABEL, ANSWER_STATUS_SVARAD, ANSWER_STATUS_OSVARAD, canonical_issue_type
 
 bp = Blueprint("main", __name__)
 
@@ -2063,6 +2063,215 @@ def speeches():
         chart_labels=chart_labels,
         chart_series=chart_series,
         error=error,
+    )
+
+
+@bp.route("/questions")
+def questions():
+    engine = _get_engine()
+    with Session(engine) as session:
+        lthing = _selected_lthing(session)
+        if lthing is None:
+            lthing = _current_lthing(session)
+
+        people = session.execute(
+            select(models.ThingmannalistiThingmadur)
+            .where(models.ThingmannalistiThingmadur.ingest_lthing == lthing)
+        ).scalars().all()
+        member_map = {}
+        for p in people:
+            if getattr(p, "attr_id", None) is not None:
+                try:
+                    member_map[int(p.attr_id)] = p
+                except Exception:
+                    continue
+
+        seats = session.execute(
+            select(MemberSeat).where(MemberSeat.lthing == lthing)
+        ).scalars().all() if manual_models else []
+
+        def to_regular_days(days_total: int) -> int:
+            return int((days_total * 5) // 7)
+
+        seat_by_member: Dict[int, MemberSeat] = {}
+        for seat in seats:
+            if seat.member_id is None:
+                continue
+            try:
+                mid = int(seat.member_id)
+            except Exception:
+                continue
+            existing = seat_by_member.get(mid)
+            inn_dt = parse_date(seat.inn) or dt.datetime.min
+            existing_dt = parse_date(existing.inn) if existing else None
+            if existing is None or (existing_dt or dt.datetime.min) < inn_dt:
+                seat_by_member[mid] = seat
+
+        party_by_member: Dict[int, str] = {}
+        for m in people:
+            if m.attr_id is None:
+                continue
+            try:
+                mid = int(m.attr_id)
+            except Exception:
+                continue
+            seat = seat_by_member.get(mid)
+            party = None
+            if seat and seat.party_name:
+                party = seat.party_name
+            elif seat and seat.party_id:
+                party = str(seat.party_id)
+            elif m.leaf_skammstofun:
+                party = m.leaf_skammstofun
+            if party:
+                party_by_member[mid] = party
+
+        issues = session.execute(
+            select(models.ThingmalalistiMal)
+            .where(models.ThingmalalistiMal.ingest_lthing == lthing)
+        ).scalars().all()
+
+        question_issues = []
+        for issue in issues:
+            itype = canonical_issue_type(
+                getattr(issue, "leaf_malstegund_heiti2", None) or getattr(issue, "leaf_malstegund_heiti", None)
+            )
+            if itype and itype.casefold() == WRITTEN_QUESTION_LABEL.casefold():
+                question_issues.append(issue)
+
+        docs_thingskjal = session.execute(
+            select(models.ThingskjalalistiThingskjal)
+            .where(models.ThingskjalalistiThingskjal.ingest_lthing == lthing)
+        ).scalars().all()
+        dates = []
+        for doc in docs_thingskjal:
+            attach_flutningsmenn(doc)
+            dtv = parse_date(getattr(doc, "leaf_utbyting", None))
+            if dtv:
+                dates.append(dtv.date())
+        session_end = max(dates) if dates else dt.date.today()
+        docs_by_nr: Dict[int, Any] = {}
+        for doc in docs_thingskjal:
+            if doc.attr_skjalsnumer is None:
+                continue
+            try:
+                docs_by_nr[int(doc.attr_skjalsnumer)] = doc
+            except Exception:
+                continue
+
+        issue_docs = session.execute(
+            select(IssueDocument).where(IssueDocument.lthing == lthing)
+        ).scalars().all() if manual_models and hasattr(manual_models, "IssueDocument") else []
+
+        docs_by_mal: Dict[tuple, List[Any]] = defaultdict(list)
+        for d in issue_docs:
+            stored = docs_by_nr.get(d.skjalnr or -1)
+            proxy = type("DocProxy", (), {
+                "leaf_skjalategund": getattr(stored, "leaf_skjalategund", None),
+                "leaf_utbyting": getattr(stored, "leaf_utbyting", None) or getattr(d, "utbyting", None),
+                "leaf_athugasemd": getattr(stored, "leaf_athugasemd", None),
+                "_flutningsmenn": getattr(stored, "_flutningsmenn", []),
+            })
+            docs_by_mal[(d.malnr, d.malflokkur)].append(proxy)
+
+        party_filter = request.args.get("party")
+        status_filter = request.args.get("status")
+
+        entries = []
+        available_parties: set[str] = set()
+        for issue in question_issues:
+            if issue.attr_malsnumer is None:
+                continue
+            mal_key = (issue.attr_malsnumer, getattr(issue, "attr_malsflokkur", None))
+            docs_for_issue = (
+                docs_by_mal.get(mal_key)
+                or docs_by_mal.get((issue.attr_malsnumer, None))
+                or docs_by_mal.get((issue.attr_malsnumer, ""))
+                or []
+            )
+
+            primary_mid = None
+            for doc in docs_for_issue:
+                mid = flutningsmenn_primary_id(doc)
+                if mid is not None:
+                    primary_mid = int(mid)
+                    break
+            member = member_map.get(primary_mid) if primary_mid is not None else None
+            party = party_by_member.get(primary_mid) if primary_mid is not None else None
+            if party:
+                available_parties.add(party)
+
+            question_dt = None
+            answer_dt = None
+            for doc in docs_for_issue:
+                stype = (getattr(doc, "leaf_skjalategund", "") or "").lower()
+                utb = parse_date(getattr(doc, "leaf_utbyting", None))
+                is_question_doc = ("fsp" in stype) or ("fyrirspurn" in stype)
+                is_answer_doc = ("svar" in stype) and not is_question_doc
+                if is_question_doc and utb:
+                    if question_dt is None or utb < question_dt:
+                        question_dt = utb
+                if is_answer_doc:
+                    attn = getattr(doc, "leaf_athugasemd", None) or ""
+                    cand_dt = prefer_athugasemd_date(attn) or utb
+                    if cand_dt and (answer_dt is None or cand_dt < answer_dt):
+                        answer_dt = cand_dt
+            status = ANSWER_STATUS_SVARAD if answer_dt else ANSWER_STATUS_OSVARAD
+
+            if party_filter and party_filter != party:
+                continue
+            if status_filter and status_filter != status:
+                continue
+
+            latency = None
+            regular_days = None
+            if question_dt:
+                today = dt.date.today()
+                if answer_dt:
+                    end_dt = answer_dt.date()
+                else:
+                    end_dt = today
+                delta_days = max((end_dt - question_dt.date()).days, 0)
+                regular_days = to_regular_days(delta_days)
+                latency = business_days_between(question_dt.date(), end_dt)
+            else:
+                latency = None
+
+            entries.append({
+                "malnr": issue.attr_malsnumer,
+                "title": issue.leaf_malsheiti,
+                "party": party,
+                "member": member,
+                "status": status,
+                "question_date": question_dt.date() if question_dt else None,
+                "answer_date": answer_dt.date() if answer_dt else None,
+                "latency": latency,
+                "regular_days": regular_days,
+                "html": issue.leaf_html,
+                "xml": issue.leaf_xml,
+            })
+
+        entries.sort(key=lambda e: (e["question_date"] or dt.date.min), reverse=True)
+        party_options = sorted(available_parties, key=icelandic_sort_key)
+
+        def to_regular_days(business_days: int) -> int:
+            return int((business_days * 5) // 7)
+
+        answered_latencies = [to_regular_days(e["latency"]) for e in entries if e["status"] == ANSWER_STATUS_SVARAD and e["latency"] is not None]
+        all_latencies = [to_regular_days(e["latency"]) for e in entries if e["latency"] is not None]
+        avg_answered = sum(answered_latencies) / len(answered_latencies) if answered_latencies else None
+        avg_all = sum(all_latencies) / len(all_latencies) if all_latencies else None
+
+    return render_template(
+        "questions.html",
+        current_lthing=lthing,
+        questions=entries,
+        party_options=party_options,
+        party_filter=party_filter or "",
+        status_filter=status_filter or "",
+        avg_answered=avg_answered,
+        avg_all=avg_all,
+        error=None if entries else "Engar fyrirspurnir fundust fyrir þetta þing.",
     )
 
 

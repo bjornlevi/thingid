@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+    <div>
+        <p class="eyebrow">Fyrirspurnir</p>
+        <h1>Fyrirspurnir til skriflegs svars</h1>
+        <p class="lede">Yfirlit yfir fyrirspurnir á valnu þingi. Sía eftir flokk flutningsmanns og svarstöðu.</p>
+    </div>
+</section>
+
+<section class="stack">
+    <div class="panel">
+        <div class="panel-head">
+            <div>
+                <p class="eyebrow">Sía</p>
+                <h2>Síur</h2>
+            </div>
+        </div>
+        <div class="panel-body">
+            <form method="get" class="filter-row filter-pills">
+                <div class="filter-group">
+                    <span class="muted">Flokkur:</span>
+                    <div class="pill-set">
+                        <a class="pill filter-pill{% if not party_filter %} active{% endif %}" href="{{ url_for('main.questions', lthing=current_lthing, status=status_filter or None) }}">Allir</a>
+                        {% for p in party_options %}
+                            <a class="pill filter-pill{% if party_filter == p %} active{% endif %}" href="{{ url_for('main.questions', lthing=current_lthing, party=p, status=status_filter or None) }}">{{ p }}</a>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div class="filter-group">
+                    <span class="muted">Staða:</span>
+                    <div class="pill-set">
+                        <a class="pill filter-pill{% if not status_filter %} active{% endif %}" href="{{ url_for('main.questions', lthing=current_lthing, party=party_filter or None) }}">Allar</a>
+                        <a class="pill filter-pill{% if status_filter == 'svarað' %} active{% endif %}" href="{{ url_for('main.questions', lthing=current_lthing, party=party_filter or None, status='svarað') }}">Svarað</a>
+                        <a class="pill filter-pill{% if status_filter == 'ósvarað' %} active{% endif %}" href="{{ url_for('main.questions', lthing=current_lthing, party=party_filter or None, status='ósvarað') }}">Ósvarað</a>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="panel-head">
+            <div>
+                <p class="eyebrow">Niðurstöður</p>
+                <h2>Fyrirspurnir</h2>
+            </div>
+        </div>
+        <div class="panel-body">
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-label">Meðalsvartími (svarað)</div>
+                    <div class="metric-value">{% if avg_answered is not none %}{{ "%.1f"|format(avg_answered) }} dagar{% else %}—{% endif %}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Meðalsvartími (öll mál)</div>
+                    <div class="metric-value">{% if avg_all is not none %}{{ "%.1f"|format(avg_all) }} dagar{% else %}—{% endif %}</div>
+                </div>
+            </div>
+            {% if error %}
+                <p class="muted">{{ error }}</p>
+            {% else %}
+                <ul class="list large questions-list">
+                    {% for q in questions %}
+                        <li>
+                            <div class="question-card">
+                                <div class="question-meta">
+                                    {% if q.member %}
+                                        <img src="https://www.althingi.is/myndir/mynd/thingmenn/{{ q.member.attr_id }}/org/mynd.jpg" alt="{{ q.member.leaf_nafn }}" class="avatar" onerror="this.style.display='none';"/>
+                                    {% endif %}
+                                </div>
+                                <div class="question-body">
+                                    <div class="question-head">
+                                        <div>
+                                            <div class="question-title">
+                                                <strong>
+                                                    {% if q.member %}
+                                                        <a href="{{ url_for('main.member_detail', member_id=q.member.attr_id, **session_params) }}">{{ q.member.leaf_nafn }}</a>
+                                                    {% else %}
+                                                        Flutningsmaður óþekktur
+                                                    {% endif %}
+                                                </strong>
+                                                {% if q.party %}<span class="pill subtle">{{ q.party }}</span>{% endif %}
+                                            </div>
+                                            {% if q.html %}
+                                                <a class="title-link" href="{{ q.html }}">{{ q.title or "Ónefnt mál" }}</a>
+                                            {% elif q.xml %}
+                                                <a class="title-link" href="{{ q.xml }}">{{ q.title or "Ónefnt mál" }}</a>
+                                            {% else %}
+                                                <span class="muted">{{ q.title or "Ónefnt mál" }}</span>
+                                            {% endif %}
+                                        </div>
+                                        <span class="pill neutral">{{ q.status }}</span>
+                                    </div>
+                                    <div class="question-foot muted">
+                                        {% if q.status == "svarað" %}
+                                            Svarað eftir {{ q.regular_days if q.regular_days is not none else "?" }} daga{% if q.answer_date %}, {{ q.answer_date }}{% endif %}
+                                        {% else %}
+                                            Ósvarað í {{ q.regular_days if q.regular_days is not none else "?" }} daga{% if q.question_date %} (frá {{ q.question_date }}){% endif %}
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}{{ super() }}{% endblock %}
