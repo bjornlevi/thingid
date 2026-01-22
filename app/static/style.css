@@ -228,6 +228,68 @@ details[open] summary { color: var(--accent); }
     gap: 0.35rem;
     min-width: 56px;
 }
+.charts-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+    justify-items: center;
+}
+.chart-card {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.75rem;
+    background: rgba(255,255,255,0.04);
+    width: clamp(320px, 90vw, 720px);
+    min-height: 360px;
+    display: flex;
+    flex-direction: column;
+}
+.chart-card canvas {
+    width: 100% !important;
+    height: 320px !important;
+}
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(4px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+}
+#chart-modal {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+    pointer-events: none;
+}
+#chart-modal .modal-card {
+    width: min(1200px, 95vw);
+    max-height: 98vh;
+    overflow: auto;
+    background: #0f172a;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1rem;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.45);
+    transform: translateY(10px);
+    opacity: 0;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+#chart-modal .modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+}
+#chart-modal .modal-head h3 { margin: 0; }
+#chart-modal.open { pointer-events: auto; }
+#chart-modal.open .modal-backdrop { opacity: 1; pointer-events: auto; }
+#chart-modal.open .modal-card { opacity: 1; transform: translateY(0); }
 .vote-row {
     display: grid;
     grid-template-columns: 1fr auto auto;
@@ -333,3 +395,5 @@ details[open] summary { color: var(--accent); }
     .site-header { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
     nav a { margin-left: 0; margin-right: 0.5rem; }
 }
+#chart-modal .charts-grid .chart-card { display: none; }
+#chart-modal .charts-grid .chart-card.active { display: block; }

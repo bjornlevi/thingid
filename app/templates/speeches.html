@@ -32,8 +32,29 @@
     {% endif %}
     {% if error %}
         <p class="text-danger">{{ error }}</p>
-    {% endif %}
+{% endif %}
 </section>
+
+{% if chart_labels %}
+<section class="stack">
+    <div class="panel">
+        <div class="panel-head">
+            <div>
+                <p class="eyebrow">Línurit</p>
+                <h3>Skoða ræðutölfræði</h3>
+            </div>
+        </div>
+        <div class="panel-body chart-trigger-grid">
+            <button class="pill link chart-trigger" data-chart="chart-longest">Lengstu ræður</button>
+            <button class="pill link chart-trigger" data-chart="chart-shortest">Stystu ræður</button>
+            <button class="pill link chart-trigger" data-chart="chart-fastest">Hraðastar</button>
+            <button class="pill link chart-trigger" data-chart="chart-slowest">Hægustu</button>
+            <button class="pill link chart-trigger" data-chart="chart-avg">Meðalorð</button>
+            <button class="pill link chart-trigger" data-chart="chart-total">Samtals orð</button>
+        </div>
+    </div>
+</section>
+{% endif %}
 
 <section class="stack">
     <div class="panel">
@@ -401,4 +422,105 @@
         </div>
     </div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+{% if chart_labels %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+(function() {
+  const labels = {{ chart_labels|tojson }};
+  const series = {{ chart_series|tojson }};
+  const modal = document.createElement("div");
+  modal.id = "chart-modal";
+  modal.innerHTML = `
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>Línurit ræðugagna</h3>
+        <button class="pill link" id="close-chart-modal">Loka</button>
+      </div>
+      <div class="charts-grid">
+        <div class="chart-card" data-chart="chart-longest"><h4>Lengstu ræður (orð)</h4><canvas id="chart-longest"></canvas></div>
+        <div class="chart-card" data-chart="chart-shortest"><h4>Stystu ræður (orð)</h4><canvas id="chart-shortest"></canvas></div>
+        <div class="chart-card" data-chart="chart-fastest"><h4>Hraðastar ræður (orð/mín)</h4><canvas id="chart-fastest"></canvas></div>
+        <div class="chart-card" data-chart="chart-slowest"><h4>Hægustu ræður (orð/mín)</h4><canvas id="chart-slowest"></canvas></div>
+        <div class="chart-card" data-chart="chart-avg"><h4>Meðalorð</h4><canvas id="chart-avg"></canvas></div>
+        <div class="chart-card" data-chart="chart-total"><h4>Samtals orð</h4><canvas id="chart-total"></canvas></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  const colors = {
+    longest: "#7c3aed",
+    shortest: "#4fd1c5",
+    fastest: "#22c55e",
+    slowest: "#f59e0b",
+    avg: "#60a5fa",
+    total: "#f472b6",
+  };
+  const commonOptions = {
+    responsive: false,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    scales: { y: { beginAtZero: true } },
+    plugins: { legend: { display: false } },
+  };
+  function build(id, data, color) {
+    const ctx = document.getElementById(id);
+    if (!ctx) return;
+    ctx.width = 680;
+    ctx.height = 320;
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: id,
+          data: data,
+          borderColor: color,
+          backgroundColor: color,
+          tension: 0.25,
+          pointRadius: 3,
+          pointBackgroundColor: color,
+          fill: false,
+        }]
+      },
+      options: commonOptions,
+    });
+  }
+  build("chart-longest", series.longest_words, colors.longest);
+  build("chart-shortest", series.shortest_words, colors.shortest);
+  build("chart-fastest", series.fastest_wpm, colors.fastest);
+  build("chart-slowest", series.slowest_wpm, colors.slowest);
+  build("chart-avg", series.avg_words, colors.avg);
+  build("chart-total", series.total_words, colors.total);
+
+  const chartCards = Array.from(modal.querySelectorAll(".chart-card"));
+  function showModal(targetId) {
+    if (!targetId) {
+      modal.classList.remove("open");
+      chartCards.forEach(card => card.classList.remove("active"));
+      return;
+    }
+    modal.classList.add("open");
+    chartCards.forEach(card => {
+      const isMatch = card.getAttribute("data-chart") === targetId;
+      card.classList.toggle("active", isMatch);
+    });
+  }
+  const openBtn = document.getElementById("open-chart-modal");
+  const closeBtn = document.getElementById("close-chart-modal");
+  document.querySelectorAll(".chart-trigger").forEach(btn => {
+    btn.addEventListener("click", () => showModal(btn.getAttribute("data-chart")));
+  });
+  if (closeBtn) closeBtn.addEventListener("click", () => showModal(null));
+  modal.addEventListener("click", (e) => {
+    if (e.target.classList.contains("modal-backdrop")) showModal(null);
+  });
+})();
+</script>
+{% endif %}
 {% endblock %}

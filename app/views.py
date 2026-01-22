@@ -2004,6 +2004,46 @@ def speeches():
             for m in member_stats
         ]
 
+        # per-löggjafarþing time-series for charts
+        chart_labels: List[int] = []
+        chart_series = {
+            "longest_words": [],
+            "shortest_words": [],
+            "fastest_wpm": [],
+            "slowest_wpm": [],
+            "avg_words": [],
+            "total_words": [],
+        }
+        agg_rows = session.execute(
+            select(
+                Speech.lthing,
+                func.max(Speech.word_count),
+                func.min(func.nullif(Speech.word_count, 0)),
+                func.max(Speech.words_per_minute),
+                func.min(func.nullif(Speech.words_per_minute, 0)),
+                func.avg(Speech.word_count),
+                func.sum(Speech.word_count),
+            )
+            .where(Speech.lthing.is_not(None))
+            .group_by(Speech.lthing)
+        ).all()
+        for row in sorted(agg_rows, key=lambda r: r[0]):
+            lthing_val = row[0]
+            if lthing_val is None:
+                continue
+            if int(lthing_val) < 115:
+                continue
+            total_words = int(row[6] or 0)
+            if total_words <= 0:
+                continue
+            chart_labels.append(int(lthing_val))
+            chart_series["longest_words"].append(int(row[1] or 0))
+            chart_series["shortest_words"].append(int(row[2] or 0))
+            chart_series["fastest_wpm"].append(float(row[3] or 0))
+            chart_series["slowest_wpm"].append(float(row[4] or 0))
+            chart_series["avg_words"].append(float(row[5] or 0))
+            chart_series["total_words"].append(total_words)
+
     error = None
     if total_speeches == 0:
         error = "Engar ræður skráðar fyrir þetta löggjafarþing."
@@ -2020,6 +2060,8 @@ def speeches():
         stats=stats,
         member_focus=member_focus,
         member_options=member_options,
+        chart_labels=chart_labels,
+        chart_series=chart_series,
         error=error,
     )
 
