@@ -1628,7 +1628,9 @@ def main() -> int:
                     # vote sessions
                     populate_vote_sessions_and_attendance(session, lthing, manual_models)
                     # committee attendance
-                    cache_dir = Path(args.cache_dir)
+                    cache_dir = Path(args.cache_dir) / str(lthing)
+                    if not cache_dir.exists():
+                        cache_dir = Path(args.cache_dir)
                     populate_committee_attendance(session, cache_dir, lthing, abbr_map, manual_models)
                 if not args.skip_speeches:
                     try:
