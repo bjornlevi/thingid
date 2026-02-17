@@ -17,7 +17,7 @@ check_data:
 get_data:
 	@mkdir -p $(dir $(DB))
 	@reset_flag=$$(test "$(reset)" = "1" && echo "--reset-db" || echo "--no-reset-db"); \
-	@if echo "$(thing)" | grep -q ',' ; then \
+	if echo "$(thing)" | grep -q ',' ; then \
 		$(PYTHON) scripts/get_data.py --db $(DB) --schema $(SCHEMA) --models-dir $(MODELS_DIR) $$reset_flag --lthing-range $(thing); \
 	elif [ "$(thing)" = "all" ]; then \
 		$(PYTHON) scripts/get_data.py --db $(DB) --schema $(SCHEMA) --models-dir $(MODELS_DIR) $$reset_flag --all-lthing; \
