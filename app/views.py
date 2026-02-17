@@ -142,6 +142,68 @@ def _cached_issue_meta(url: Optional[str], cache_dir: Path, cache: Dict[str, tup
     return cache[url]
 
 
+def _party_from_thingseta_cache(member: Any, lthing: Optional[int]) -> tuple[Optional[str], Optional[str]]:
+    """
+    Fallback party/type extraction from cached thingseta XML for members
+    that have no matching row in member_seat for the selected lthing.
+    """
+    url = getattr(member, "leaf_xml_thingseta", None)
+    if not url:
+        return None, None
+    path = _cache_path_for_url(url, _cache_dir())
+    if not path.exists():
+        return None, None
+
+    try:
+        root = ET.parse(path).getroot()
+    except Exception:
+        return None, None
+
+    candidates: List[Dict[str, Any]] = []
+    for node in root.iter():
+        if _norm_tag(node.tag) != "thingseta":
+            continue
+        row: Dict[str, Any] = {"thing": None, "party": None, "type": None, "inn": None, "ut": None}
+        for c in list(node):
+            tag = _norm_tag(c.tag)
+            text_val = (c.text or "").strip() or None
+            if tag == "thing":
+                try:
+                    row["thing"] = int(text_val) if text_val is not None else None
+                except Exception:
+                    row["thing"] = None
+            elif tag == "thingflokkur":
+                row["party"] = text_val
+            elif tag == "tegund":
+                row["type"] = text_val
+            elif tag == "timabil":
+                for tc in list(c):
+                    ttag = _norm_tag(tc.tag)
+                    ttext = (tc.text or "").strip() or None
+                    if ttag == "inn":
+                        row["inn"] = parse_date(ttext) if ttext else None
+                    elif ttag == "ut":
+                        row["ut"] = parse_date(ttext) if ttext else None
+        # Ignore URL-only <þingseta> nodes under <xml>; require an actual party entry.
+        if not row.get("party"):
+            continue
+        if lthing is None or row["thing"] is None or int(row["thing"]) == int(lthing):
+            candidates.append(row)
+
+    if not candidates:
+        return None, None
+
+    # Prefer active rows (no "út"), then latest "inn", then latest "út".
+    def _pick_key(r: Dict[str, Any]) -> tuple:
+        active = 1 if r.get("ut") is None else 0
+        inn = r.get("inn") or dt.datetime.min
+        ut = r.get("ut") or dt.datetime.min
+        return (active, inn, ut)
+
+    best = sorted(candidates, key=_pick_key, reverse=True)[0]
+    return best.get("party"), best.get("type")
+
+
 def _parse_iso(ts: Optional[str]) -> Optional[dt.datetime]:
     if not ts:
         return None
@@ -722,6 +784,18 @@ def members():
         seats = session.execute(
             select(MemberSeat).where(MemberSeat.lthing == lthing)
         ).scalars().all()
+        # member_seat can lag one lthing behind the issue/member feeds; fallback to latest available
+        if not seats:
+            try:
+                fallback_lthing = session.execute(
+                    select(func.max(MemberSeat.lthing))
+                ).scalar_one_or_none()
+                if fallback_lthing and fallback_lthing != lthing:
+                    seats = session.execute(
+                        select(MemberSeat).where(MemberSeat.lthing == fallback_lthing)
+                    ).scalars().all()
+            except Exception:
+                seats = []
         mal_rows = session.execute(
             select(models.ThingmalalistiMal).where(models.ThingmalalistiMal.ingest_lthing == lthing)
         ).scalars().all()
@@ -885,6 +959,22 @@ def members():
 
     for p in people:
         p.current_seat = seat_by_member.get(int(p.attr_id)) if p.attr_id is not None else None
+        if p.current_seat is None or not getattr(p.current_seat, "party_name", None):
+            party_fallback, type_fallback = _party_from_thingseta_cache(p, lthing)
+            if party_fallback or type_fallback:
+                if p.current_seat is not None:
+                    if party_fallback and not getattr(p.current_seat, "party_name", None):
+                        p.current_seat.party_name = party_fallback
+                    if type_fallback and not getattr(p.current_seat, "type", None):
+                        p.current_seat.type = type_fallback
+                else:
+                    p.current_seat = type("SeatProxy", (), {
+                        "party_name": party_fallback,
+                        "type": type_fallback,
+                        "kjordaemi_name": None,
+                        "inn": None,
+                        "ut": None,
+                    })
         p.cv_slug = quote((p.leaf_nafn or "").replace(" ", "_"))
         p.issues = []
 
