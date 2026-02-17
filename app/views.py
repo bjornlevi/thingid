@@ -1638,6 +1638,7 @@ def member_attendance(member_id: int):
         committee_intervals[int(nm.nefnd_id)].append((inn_dt.date() if inn_dt else None, ut_dt.date() if ut_dt else None))
 
     present_map = {ar.meeting_id for ar in attendance_rows if ar.status in ("present", "proxy_present")}
+    attendance_meeting_ids = {ar.meeting_id for ar in attendance_rows if ar.meeting_id is not None}
     arrival_map = {ar.meeting_id: ar.arrival_time for ar in attendance_rows if getattr(ar, "arrival_time", None)}
     nefnd_name_map = {int(n.attr_id): (n.leaf_heiti or f"Nefnd {n.attr_id}") for n in nefndir if n.attr_id is not None}
     abbr_map = {_norm_abbr(p.leaf_skammstofun): int(p.attr_id) for p in people if p.attr_id is not None and p.leaf_skammstofun}
@@ -1791,13 +1792,18 @@ def member_attendance(member_id: int):
     attended = 0
     total = 0
     for mt in meetings:
-        if mt.nefnd_id not in committee_intervals:
+        nefnd_id_int = int(mt.nefnd_id) if mt.nefnd_id is not None else None
+        has_direct_attendance = mt.id in attendance_meeting_ids
+        committee_windows = committee_intervals.get(nefnd_id_int, []) if nefnd_id_int is not None else []
+        # Prefer committee membership windows when available, but fall back to
+        # explicit attendance rows if committee membership data is missing.
+        if not committee_windows and not has_direct_attendance:
             continue
         dt_val = _parse_iso(mt.start_time) or parse_date(mt.start_time)
         if not dt_val:
             continue
         d = dt_val.date()
-        if not in_date_interval(d, committee_intervals[int(mt.nefnd_id)]):
+        if committee_windows and not in_date_interval(d, committee_windows):
             continue
         if member_intervals and not _in_intervals(dt_val, member_intervals):
             continue
