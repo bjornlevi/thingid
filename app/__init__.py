@@ -87,6 +87,14 @@ def create_app() -> Flask:
     engine = create_engine(db_url, future=True)
     app.config["ENGINE"] = engine
 
+    # Drop raw_text column from speech table if it exists (space optimization)
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE speech DROP COLUMN raw_text"))
+            conn.commit()
+        except Exception:
+            pass
+
     # Respect reverse-proxy headers. In particular, `X-Forwarded-Prefix` lets us
     # generate correct URLs when the proxy strips the mount prefix upstream.
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)

@@ -180,7 +180,6 @@ class Speech(models.Base):
     audio_url = models.Column(models.Text, nullable=True)
     html_url = models.Column(models.Text, nullable=True)
     xml_url = models.Column(models.Text, nullable=True)
-    raw_text = models.Column(models.Text, nullable=True)
 
     __table_args__ = (
         models.UniqueConstraint("lthing", "speech_id", name="uq_speech_lthing_id"),

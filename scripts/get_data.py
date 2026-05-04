@@ -970,7 +970,6 @@ def populate_speeches(
             audio_url=getattr(row, "leaf_slodir_hljod", None),
             html_url=getattr(row, "leaf_slodir_html", None),
             xml_url=xml_url,
-            raw_text=speech_text,
         ))
         if len(speeches) % 200 == 0 and speeches:
             session.add_all(speeches)
