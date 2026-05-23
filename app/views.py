@@ -3084,8 +3084,8 @@ def biographies():
 
         bio_by_member = {b.member_id: b for b in bios}
 
-        # Filter by tag if specified (only in all-sessions view)
-        if show_all and filter_tag and filter_type:
+        # Filter by tag if specified (works in both all-sessions and single-session views)
+        if filter_tag and filter_type:
             filtered_people = []
             for p in people:
                 bio = bio_by_member.get(p.attr_id)

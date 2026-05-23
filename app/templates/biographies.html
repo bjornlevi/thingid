@@ -59,7 +59,7 @@
                                         {% if show_all %}
                                             <a href="{{ url_for('main.biographies', all='1', tag=tag, type='education') }}" class="tag-link">{{ tag }}</a>
                                         {% else %}
-                                            <span class="tag">{{ tag }}</span>
+                                            <a href="{{ url_for('main.biographies', lthing=lthing, tag=tag, type='education') }}" class="tag-link">{{ tag }}</a>
                                         {% endif %}
                                         <span class="tag-count">{{ count }}</span>
                                     </li>
@@ -80,7 +80,7 @@
                                         {% if show_all %}
                                             <a href="{{ url_for('main.biographies', all='1', tag=tag, type='career') }}" class="tag-link">{{ tag }}</a>
                                         {% else %}
-                                            <span class="tag">{{ tag }}</span>
+                                            <a href="{{ url_for('main.biographies', lthing=lthing, tag=tag, type='career') }}" class="tag-link">{{ tag }}</a>
                                         {% endif %}
                                         <span class="tag-count">{{ count }}</span>
                                     </li>
