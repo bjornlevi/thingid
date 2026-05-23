@@ -127,6 +127,8 @@ EDUCATION_KEYWORDS = {
         "heimspeki",
         "heilbrigðis",
         "lýðheilsu",
+        "félagsmál",
+        "tómstund",
     ],
     "háskólamenntun: landbúnaður": [
         "landbúnaður",
