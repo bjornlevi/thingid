@@ -53,6 +53,8 @@ EDUCATION_KEYWORDS = {
         "samvinnuskólapróf",
         "fiskimannapróf",
         "stýrimannapróf",
+        "rekstrarfræð",
+        "stjórnsýslu",
     ],
 
     # HÁSKÓLAMENNTUN (Higher/University Education) - by field of study
@@ -82,8 +84,6 @@ EDUCATION_KEYWORDS = {
         "fjármál",
         "bókhald",
         "þjóðhagfræð",
-        "rekstrarfræð",
-        "stjórnsýslu",
     ],
     "háskólamenntun: kennsla": [
         "kennar",
