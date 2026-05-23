@@ -71,6 +71,7 @@ EDUCATION_KEYWORDS = {
         "heilsufræð",
         "heilbrigðis",
         "lýðheilsu",
+        "dýralækn",
     ],
     "háskólamenntun: verkfræði": [
         "verkfræð",
