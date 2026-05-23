@@ -1,11 +1,12 @@
 ﻿from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
 import zlib
-from collections import defaultdict
+from collections import defaultdict, Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -2995,3 +2996,179 @@ def agenda():
                            items=agenda_items,
                            speeches_by_mal=speeches_by_mal,
                            error=error)
+
+
+@bp.route("/biographies")
+def biographies():
+    MemberBiography = getattr(manual_models, "MemberBiography", None) if manual_models else None
+    MemberSeat = getattr(manual_models, "MemberSeat", None) if manual_models else None
+
+    if not MemberBiography:
+        return render_template("error.html", error="MemberBiography model not available"), 404
+
+    engine = _get_engine()
+    show_all = request.args.get("all") in ("1", "true", "yes")
+    filter_tag = request.args.get("tag")  # Tag to filter by (education or career tag)
+    filter_type = request.args.get("type")  # "education" or "career"
+
+    with Session(engine) as session:
+        lthing = _selected_lthing(session) if not show_all else None
+
+        if show_all:
+            # Get all unique members across all sessions (one per member, with their name)
+            # Use subquery to get one row per attr_id
+            subq = select(
+                func.max(models.ThingmannalistiThingmadur.id).label("id")
+            ).group_by(
+                models.ThingmannalistiThingmadur.attr_id
+            ).subquery()
+
+            people = session.execute(
+                select(models.ThingmannalistiThingmadur)
+                .join(subq, models.ThingmannalistiThingmadur.id == subq.c.id)
+                .order_by(models.ThingmannalistiThingmadur.leaf_nafn)
+            ).scalars().all()
+
+            # Get all seats to find most recent party per member
+            all_seats = session.execute(
+                select(MemberSeat).order_by(MemberSeat.member_id, MemberSeat.inn.desc())
+            ).scalars().all()
+
+            # Map to most recent seat per member
+            seat_by_member = {}
+            for seat in all_seats:
+                if seat.member_id not in seat_by_member:
+                    seat_by_member[seat.member_id] = seat
+        else:
+            # Get all members for this lthing
+            people = session.execute(
+                select(models.ThingmannalistiThingmadur)
+                .where(models.ThingmannalistiThingmadur.ingest_lthing == lthing)
+                .order_by(models.ThingmannalistiThingmadur.leaf_nafn)
+            ).scalars().all()
+
+            # Get seat/party data
+            seats = session.execute(
+                select(MemberSeat).where(MemberSeat.lthing == lthing)
+            ).scalars().all()
+
+            if not seats:
+                try:
+                    fallback_lthing = session.execute(
+                        select(func.max(MemberSeat.lthing))
+                    ).scalar_one_or_none()
+                    if fallback_lthing and fallback_lthing != lthing:
+                        seats = session.execute(
+                            select(MemberSeat).where(MemberSeat.lthing == fallback_lthing)
+                        ).scalars().all()
+                except Exception:
+                    seats = []
+
+            # Map seats by member_id
+            seat_by_member = {}
+            for seat in seats:
+                if seat.member_id not in seat_by_member:
+                    seat_by_member[seat.member_id] = seat
+                else:
+                    # Prefer most recent seat (by inn date)
+                    existing = seat_by_member[seat.member_id]
+                    if seat.inn and existing.inn:
+                        if seat.inn > existing.inn:
+                            seat_by_member[seat.member_id] = seat
+
+        # Get biographies for all members
+        member_ids = [p.attr_id for p in people]
+        bios = session.execute(
+            select(MemberBiography).where(MemberBiography.member_id.in_(member_ids))
+        ).scalars().all()
+
+        bio_by_member = {b.member_id: b for b in bios}
+
+        # Filter by tag if specified (only in all-sessions view)
+        if show_all and filter_tag and filter_type:
+            filtered_people = []
+            for p in people:
+                bio = bio_by_member.get(p.attr_id)
+                if not bio:
+                    continue
+                tags_str = bio.education_tags if filter_type == "education" else bio.career_tags
+                if not tags_str:
+                    continue
+                try:
+                    tags = json.loads(tags_str)
+                    if filter_tag in tags:
+                        filtered_people.append(p)
+                except Exception:
+                    pass
+            people = filtered_people
+
+        # Attach seat and biography data to each person
+        for p in people:
+            p.current_seat = seat_by_member.get(p.attr_id)
+            p.bio = bio_by_member.get(p.attr_id)
+
+        # Group by party
+        parties_dict = defaultdict(list)
+        for p in people:
+            party = (p.current_seat.party_name if p.current_seat else None) or "Óflokkaðir"
+            parties_dict[party].append(p)
+
+        # Sort parties and members within parties
+        parties = {}
+        for party in sorted(parties_dict.keys(), key=icelandic_sort_key):
+            members = sorted(
+                parties_dict[party],
+                key=lambda x: (
+                    x.current_seat.type == "varamaður" if x.current_seat else False,
+                    icelandic_sort_key(x.leaf_nafn or ""),
+                ),
+            )
+            parties[party] = members
+
+        # Compute tag frequency distributions
+        all_education_tags = []
+        all_career_tags = []
+        party_tag_counts = {}
+
+        for party, members in parties.items():
+            education_tags_party = []
+            career_tags_party = []
+
+            for member in members:
+                if member.bio:
+                    if member.bio.education_tags:
+                        try:
+                            tags = json.loads(member.bio.education_tags)
+                            education_tags_party.extend(tags)
+                            all_education_tags.extend(tags)
+                        except Exception:
+                            pass
+
+                    if member.bio.career_tags:
+                        try:
+                            tags = json.loads(member.bio.career_tags)
+                            career_tags_party.extend(tags)
+                            all_career_tags.extend(tags)
+                        except Exception:
+                            pass
+
+            party_tag_counts[party] = {
+                "education": Counter(education_tags_party),
+                "career": Counter(career_tags_party),
+            }
+
+        tag_counts = {
+            "education": Counter(all_education_tags),
+            "career": Counter(all_career_tags),
+        }
+
+        return render_template(
+            "biographies.html",
+            lthing=lthing,
+            show_all=show_all,
+            filter_tag=filter_tag,
+            filter_type=filter_type,
+            parties=parties,
+            tag_counts=tag_counts,
+            party_tag_counts=party_tag_counts,
+        )

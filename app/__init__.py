@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Optional
 
 from flask import Flask
 from flask import request
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -99,6 +100,16 @@ def create_app() -> Flask:
     # generate correct URLs when the proxy strips the mount prefix upstream.
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
     app.wsgi_app = PrefixMiddleware(app.wsgi_app, url_prefix)
+
+    # Custom Jinja2 filter for JSON parsing
+    @app.template_filter("fromjson")
+    def filter_fromjson(s):
+        if not s:
+            return []
+        try:
+            return json.loads(s)
+        except Exception:
+            return []
 
     @app.context_processor
     def inject_sessions():

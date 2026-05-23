@@ -141,7 +141,7 @@ details[open] summary { color: var(--accent); }
     letter-spacing: 0.12em;
 }
 .filter-select {
-    background: var(--card);
+    background: rgba(20, 30, 48, 0.8);
     border: 1px solid var(--border);
     color: var(--text);
     border-radius: 999px;

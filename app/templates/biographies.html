@@ -1,0 +1,430 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+    <div>
+        <p class="eyebrow">Æviágripur þingmanna</p>
+        <h1>Menntun og starfsferill</h1>
+        <p class="lede">
+            {% if show_all %}
+                Yfirlit um menntun og starfsferill allra þingmanna í sögu þingsins.
+            {% else %}
+                Yfirlitssíða um menntun og starfsferill þingmanna eftir flokkum og löggjafarþingi.
+            {% endif %}
+        </p>
+    </div>
+</section>
+
+<section class="stack">
+    {% if not parties %}
+        <p class="text-danger">Engir þingmenn fundust.</p>
+    {% else %}
+        <!-- Session selector and all-time toggle -->
+        <div class="filter-row">
+            {% if not show_all %}
+                <label class="filter-label" for="lthing-select">Löggjafarþing</label>
+                <select id="lthing-select" class="filter-select" onchange="location.href = '{{ url_for('main.biographies') }}?lthing=' + this.value">
+                    {% for s in sessions|reverse %}
+                        <option value="{{ s.number }}" {% if s.number == lthing %}selected{% endif %}>{{ s.number }}</option>
+                    {% endfor %}
+                </select>
+            {% else %}
+                <span class="filter-label" style="font-weight: 600;">Öll löggjafarþing</span>
+            {% endif %}
+            <a href="{% if show_all %}{{ url_for('main.biographies', **session_params) }}{% else %}{{ url_for('main.biographies', all='1') }}{% endif %}" class="toggle-view">
+                {% if show_all %}Skoðaðu núverandi þing{% else %}Skoðaðu öll þing{% endif %}
+            </a>
+        </div>
+
+        <!-- Active filter display -->
+        {% if filter_tag %}
+            <div class="filter-display">
+                <span>Sía eftir:</span>
+                <span class="active-filter-tag">{{ filter_tag }}</span>
+                <a href="{{ url_for('main.biographies', all='1' if show_all else none) }}" class="clear-filter">Hreinsa síu</a>
+            </div>
+        {% endif %}
+
+        <!-- Summary section -->
+        <details class="panel summary-panel" open>
+            <summary>Yfirlit — {% if show_all %}Öll þing{% else %}{{ lthing }}{% endif %}</summary>
+            <div class="panel-body">
+                <div class="summary-grid">
+                    <!-- Education tags summary -->
+                    <div class="summary-section">
+                        <h3>Menntun þingmanna</h3>
+                        {% if tag_counts.education %}
+                            <ul class="tag-list">
+                                {% for tag, count in tag_counts.education.most_common(10) %}
+                                    <li>
+                                        {% if show_all %}
+                                            <a href="{{ url_for('main.biographies', all='1', tag=tag, type='education') }}" class="tag-link">{{ tag }}</a>
+                                        {% else %}
+                                            <span class="tag">{{ tag }}</span>
+                                        {% endif %}
+                                        <span class="tag-count">{{ count }}</span>
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            <p class="muted">Engar menntunargögn tiltæk.</p>
+                        {% endif %}
+                    </div>
+
+                    <!-- Career tags summary -->
+                    <div class="summary-section">
+                        <h3>Starfsferill þingmanna</h3>
+                        {% if tag_counts.career %}
+                            <ul class="tag-list">
+                                {% for tag, count in tag_counts.career.most_common(10) %}
+                                    <li>
+                                        {% if show_all %}
+                                            <a href="{{ url_for('main.biographies', all='1', tag=tag, type='career') }}" class="tag-link">{{ tag }}</a>
+                                        {% else %}
+                                            <span class="tag">{{ tag }}</span>
+                                        {% endif %}
+                                        <span class="tag-count">{{ count }}</span>
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            <p class="muted">Engar starfsferilagögn tiltæk.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </details>
+
+        <!-- Party panels -->
+        {% for party, members in parties.items() %}
+            <details class="panel party-panel" data-party="{{ party }}" open>
+                <summary>
+                    {{ party }} ({{ members|length }})
+                    {% if party_tag_counts[party] %}
+                        <span class="summary-tags">
+                            {% for tag, count in party_tag_counts[party].education.most_common(2) %}
+                                <span class="tag-badge">{{ tag }}</span>
+                            {% endfor %}
+                            {% for tag, count in party_tag_counts[party].career.most_common(2) %}
+                                <span class="tag-badge">{{ tag }}</span>
+                            {% endfor %}
+                        </span>
+                    {% endif %}
+                </summary>
+                <div class="panel-body">
+                    <table class="bio-table">
+                        <thead>
+                            <tr>
+                                <th>Þingmaður</th>
+                                <th>Menntun</th>
+                                <th>Starfsferill</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for m in members %}
+                                <tr class="bio-row" data-member-id="{{ m.attr_id }}">
+                                    <td>
+                                        <a href="{{ url_for('main.member_detail', member_id=m.attr_id, **session_params) }}">{{ m.leaf_nafn }}</a>
+                                        {% if m.current_seat and m.current_seat.type %}
+                                            <span class="muted text-sm">({{ m.current_seat.type }})</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if m.bio and m.bio.education_tags %}
+                                            {% set etags = m.bio.education_tags|fromjson %}
+                                            {% for tag in etags %}
+                                                <span class="tag">{{ tag }}</span>
+                                            {% endfor %}
+                                        {% else %}
+                                            <span class="muted">—</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if m.bio and m.bio.career_tags %}
+                                            {% set ctags = m.bio.career_tags|fromjson %}
+                                            {% for tag in ctags %}
+                                                <span class="tag">{{ tag }}</span>
+                                            {% endfor %}
+                                        {% else %}
+                                            <span class="muted">—</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="expand-cell">
+                                        {% if m.bio and (m.bio.education_text or m.bio.career_text) %}
+                                            <button class="expand-btn" onclick="toggleBioDetails(this)">⊕</button>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% if m.bio and (m.bio.education_text or m.bio.career_text) %}
+                                    <tr class="bio-detail-row" style="display:none;">
+                                        <td colspan="4">
+                                            <div class="bio-detail">
+                                                {% if m.bio.education_text %}
+                                                    <div class="bio-section">
+                                                        <h4>Menntun</h4>
+                                                        <p>{{ m.bio.education_text }}</p>
+                                                    </div>
+                                                {% endif %}
+                                                {% if m.bio.career_text %}
+                                                    <div class="bio-section">
+                                                        <h4>Starfsferill</h4>
+                                                        <p>{{ m.bio.career_text }}</p>
+                                                    </div>
+                                                {% endif %}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                {% endif %}
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+        {% endfor %}
+    {% endif %}
+</section>
+
+<style>
+    .filter-display {
+        background: rgba(100, 150, 255, 0.1);
+        border: 1px solid rgba(100, 150, 255, 0.2);
+        border-radius: 0.5rem;
+        padding: 0.75rem 1rem;
+        margin-bottom: 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .active-filter-tag {
+        background: rgba(100, 150, 255, 0.2);
+        border: 1px solid rgba(100, 150, 255, 0.3);
+        border-radius: 0.25rem;
+        padding: 0.25rem 0.75rem;
+        font-weight: 600;
+        color: #b8d4ff;
+    }
+
+    .clear-filter {
+        margin-left: auto;
+        padding: 0.25rem 0.5rem;
+        color: #b8d4ff;
+        text-decoration: none;
+        font-size: 0.85rem;
+        border: 1px solid rgba(100, 150, 255, 0.2);
+        border-radius: 0.25rem;
+        cursor: pointer;
+    }
+
+    .clear-filter:hover {
+        background: rgba(100, 150, 255, 0.15);
+    }
+
+    .tag-link {
+        color: #b8d4ff;
+        text-decoration: none;
+        cursor: pointer;
+        border-bottom: 1px dotted rgba(184, 212, 255, 0.5);
+    }
+
+    .tag-link:hover {
+        color: #d8e8ff;
+        border-bottom-color: rgba(216, 232, 255, 0.8);
+    }
+
+    .toggle-view {
+        display: inline-block;
+        margin-left: auto;
+        padding: 0.35rem 0.75rem;
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 999px;
+        color: #f5f7fb;
+        text-decoration: none;
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: background-color 0.2s;
+    }
+
+    .toggle-view:hover {
+        background: rgba(255, 255, 255, 0.15);
+        text-decoration: none;
+    }
+
+    .summary-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 2rem;
+        margin-top: 1.5rem;
+    }
+
+    .summary-section h3 {
+        margin: 0 0 1rem 0;
+        font-size: 1rem;
+        font-weight: 600;
+    }
+
+    .tag-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    .tag-list li {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        font-size: 0.95rem;
+    }
+
+    .tag {
+        display: inline-block;
+        background-color: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 0.25rem;
+        padding: 0.25rem 0.5rem;
+        font-size: 0.85rem;
+        margin-right: 0.5rem;
+        color: #f5f7fb;
+    }
+
+    .tag-badge {
+        display: inline-block;
+        background-color: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 0.25rem;
+        padding: 0.25rem 0.5rem;
+        font-size: 0.8rem;
+        margin-left: 0.5rem;
+        color: #f5f7fb;
+    }
+
+    .tag-count {
+        color: #b0b8c8;
+        font-size: 0.9rem;
+        font-weight: 600;
+    }
+
+    .summary-tags {
+        margin-left: auto;
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+
+    .bio-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.95rem;
+    }
+
+    .bio-table thead {
+        background-color: rgba(255, 255, 255, 0.05);
+        border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .bio-table th {
+        padding: 0.75rem;
+        text-align: left;
+        font-weight: 600;
+        font-size: 0.9rem;
+        color: #f5f7fb;
+    }
+
+    .bio-table td {
+        padding: 0.75rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        vertical-align: top;
+        color: #f5f7fb;
+    }
+
+    .bio-row a {
+        text-decoration: none;
+        color: #0066cc;
+    }
+
+    .bio-row a:hover {
+        text-decoration: underline;
+    }
+
+    .expand-cell {
+        width: 3rem;
+        text-align: center;
+    }
+
+    .expand-btn {
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 1.2rem;
+        padding: 0;
+        color: #b0b8c8;
+    }
+
+    .expand-btn:hover {
+        color: #f5f7fb;
+    }
+
+    .bio-detail-row td {
+        padding: 1rem;
+        background-color: rgba(255, 255, 255, 0.03);
+    }
+
+    .bio-detail {
+        line-height: 1.6;
+    }
+
+    .bio-section {
+        margin-bottom: 1.5rem;
+    }
+
+    .bio-section h4 {
+        margin: 0 0 0.5rem 0;
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #f5f7fb;
+    }
+
+    .bio-section p {
+        margin: 0;
+        color: #d0d8e8;
+    }
+
+    .text-sm {
+        font-size: 0.85rem;
+    }
+
+    @media (max-width: 768px) {
+        .summary-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .bio-table {
+            font-size: 0.85rem;
+        }
+
+        .bio-table td,
+        .bio-table th {
+            padding: 0.5rem;
+        }
+
+        .summary-tags {
+            display: none;
+        }
+    }
+</style>
+
+<script>
+    function toggleBioDetails(btn) {
+        const row = btn.closest('.bio-row');
+        const detailRow = row.nextElementSibling;
+        if (detailRow && detailRow.classList.contains('bio-detail-row')) {
+            const isHidden = detailRow.style.display === 'none';
+            detailRow.style.display = isHidden ? 'table-row' : 'none';
+            btn.textContent = isHidden ? '⊖' : '⊕';
+        }
+    }
+</script>
+{% endblock %}

@@ -13,11 +13,15 @@ ThingID is a Flask web app for browsing Alþingi (Icelandic Parliament) data. Th
 ## Development Commands
 
 ### Setup
+Requires Python 3.10+.
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+Copy `.env.example` to `.env` to configure the app (see Configuration below).
 
 ### Core workflows
 ```bash
@@ -70,6 +74,8 @@ make mint_silver thing=130
 **Configuration**:
 - Reads from `.env`, `.flaskenv`, or `THINGID_ENV_FILE`
 - Key vars: `THINGID_DB` (database path), `THINGID_PREFIX` (URL mount point), `FLASK_SECRET_KEY`
+- Alternate env var names: `DATABASE_URL` (instead of `THINGID_DB`), `SECRET_KEY` (instead of `FLASK_SECRET_KEY`)
+- See `.env.example` for all available options
 - `app/__init__.py` handles app factory, middleware (proxy headers, URL prefix), and context processors
 
 ## Key Files
@@ -83,6 +89,9 @@ make mint_silver thing=130
 | `app/views.py` | URL routing and view functions (render pages with DB queries) |
 | `app/views_helper.py` | Helper functions (current parliament session, sorting) |
 | `app/manual_models.py` | Hand-written models and data enrichment |
+| `app/utils/dates.py` | Date parsing for various Alþingi date formats |
+| `app/utils/sessions.py` | Session/parliament term utilities |
+| `app/middleware.py` | Custom middleware for URL prefix handling behind reverse proxies |
 | `wsgi.py` | WSGI entry point for production servers (gunicorn) |
 
 ## Common Tasks
@@ -91,7 +100,7 @@ make mint_silver thing=130
 
 **Modify database schema**: Run `make check_data` to regenerate models from the XML API profiles. Note: models.py is auto-generated; add supplementary models to manual_models.py instead.
 
-**Update data**: Run `make get_data` to re-fetch and load all terms, or `make get_data thing=N` for a specific session.
+**Update data**: Run `make get_data` to re-fetch and load all terms, or `make get_data thing=N` for a specific session. For periodic updates, use `scripts/cron_get_data.sh`.
 
 **Deploy**: Use `wsgi.py` with gunicorn: `gunicorn wsgi:application`. Configure via environment variables or `.env`.
 

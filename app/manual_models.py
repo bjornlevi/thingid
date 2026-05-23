@@ -184,3 +184,20 @@ class Speech(models.Base):
     __table_args__ = (
         models.UniqueConstraint("lthing", "speech_id", name="uq_speech_lthing_id"),
     )
+
+
+class MemberBiography(models.Base):
+    __tablename__ = "member_biography"
+
+    id = models.Column(models.Integer, primary_key=True, autoincrement=True)
+    member_id = models.Column(models.Integer, index=True, unique=True)
+    education_text = models.Column(models.Text, nullable=True)
+    career_text = models.Column(models.Text, nullable=True)
+    education_tags = models.Column(models.Text, nullable=True)
+    career_tags = models.Column(models.Text, nullable=True)
+    source_url = models.Column(models.Text, nullable=True)
+    scraped_at = models.Column(models.Text, nullable=True)
+
+    __table_args__ = (
+        models.UniqueConstraint("member_id", name="uq_member_biography"),
+    )
