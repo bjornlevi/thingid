@@ -146,7 +146,7 @@ CAREER_KEYWORDS = {
     ],
     "þjónustu-, sölu- og afgreiðslufólk": [
         "kaupmaður", "kaupmanna", "verslunar", "verslun",
-        "flutningsmaður",
+        "flutningsmaður", "flugþjónn", "bílstjóri", "þjónustufulltrúi",
     ],
     "iðnaðarmenn og sérhæft iðnverkafólk": [
         "steinhögg", "múrari", "smiðir", "trésmið",
@@ -155,7 +155,7 @@ CAREER_KEYWORDS = {
     "þingmaður": ["þingmaður", "alþingismaður"],
     "sveitarstjórn": ["bæjar", "hreppstjór", "sveitarstjór"],
     "búskapur": ["bóndi", "búi", "bú\\."],
-    "menning": ["leikari", "listamadur", "músík"],
+    "menning": ["leikari", "listamadur", "músík", "safnvörður"],
 }
 
 
@@ -284,6 +284,35 @@ def scrape_biographies(db_url: str, force: bool = False) -> None:
         logger.info("Done")
 
 
+def retag_biographies(db_url: str) -> None:
+    """Re-apply tags to existing biography text without fetching XML."""
+    engine = create_engine(db_url)
+
+    with Session(engine) as session:
+        # Get all biographies with text
+        bios = session.execute(
+            select(MemberBiography).where(
+                (MemberBiography.education_text != "") | (MemberBiography.career_text != "")
+            )
+        ).scalars().all()
+
+        logger.info(f"Retagging {len(bios)} biographies")
+
+        for idx, bio in enumerate(bios, 1):
+            if idx % 100 == 0:
+                logger.info(f"[{idx}/{len(bios)}] Retagging...")
+
+            education_tags = apply_tags(bio.education_text or "", EDUCATION_KEYWORDS)
+            career_tags = apply_tags(bio.career_text or "", CAREER_KEYWORDS)
+
+            bio.education_tags = json.dumps(education_tags)
+            bio.career_tags = json.dumps(career_tags)
+            session.add(bio)
+
+        session.commit()
+        logger.info("Done retagging")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Scrape member biographies from Althingi XML endpoints"
@@ -298,9 +327,17 @@ def main():
         action="store_true",
         help="Re-scrape even if already in database",
     )
+    parser.add_argument(
+        "--retag-only",
+        action="store_true",
+        help="Re-apply tags to existing text without fetching XML (fast keyword updates)",
+    )
     args = parser.parse_args()
 
-    scrape_biographies(args.db, force=args.force)
+    if args.retag_only:
+        retag_biographies(args.db)
+    else:
+        scrape_biographies(args.db, force=args.force)
 
 
 if __name__ == "__main__":
