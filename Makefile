@@ -9,7 +9,7 @@ FLASK_ENV ?= development
 APP_URL_PREFIX ?=
 THINGID_PREFIX ?=
 
-.PHONY: check_data get_data web scrape_bios
+.PHONY: check_data get_data web scrape_bios retag_bios
 
 check_data:
 	$(PYTHON) scripts/check_data.py --outdir $(OUTDIR) --models-dir $(MODELS_DIR)
@@ -68,3 +68,6 @@ web:
 scrape_bios:
 	@mkdir -p $(dir $(DB))
 	$(PYTHON) scripts/scrape_bios.py --db sqlite:///$(DB)
+
+retag_bios:
+	$(PYTHON) scripts/scrape_bios.py --db sqlite:///$(DB) --retag-only
