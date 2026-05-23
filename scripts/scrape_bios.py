@@ -55,6 +55,8 @@ EDUCATION_KEYWORDS = {
         "stýrimannapróf",
         "rekstrarfræð",
         "stjórnsýslu",
+        "búfræðing",
+        "búfræðipróf",
     ],
 
     # HÁSKÓLAMENNTUN (Higher/University Education) - by field of study
@@ -128,8 +130,6 @@ EDUCATION_KEYWORDS = {
         "landbúnaður",
         "búvísind",
         "bújarðarfræð",
-        "búfræðing",
-        "búfræðipróf",
     ],
 }
 
