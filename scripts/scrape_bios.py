@@ -38,6 +38,7 @@ EDUCATION_KEYWORDS = {
         "menntaskóla",
         "fjölbraut",
         "gagnfræðapróf",
+        "verslunarpróf",
     ],
     "starfsmenntun": [
         "iðnnám",
@@ -81,6 +82,8 @@ EDUCATION_KEYWORDS = {
         "fjármál",
         "bókhald",
         "þjóðhagfræð",
+        "rekstrarfræð",
+        "stjórnsýslu",
     ],
     "háskólamenntun: kennsla": [
         "kennar",
