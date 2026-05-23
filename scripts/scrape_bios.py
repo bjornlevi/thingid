@@ -84,6 +84,7 @@ EDUCATION_KEYWORDS = {
         "fjármál",
         "bókhald",
         "þjóðhagfræð",
+        "viðskiptafræð",
     ],
     "háskólamenntun: kennsla": [
         "kennar",
