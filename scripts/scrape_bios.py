@@ -71,8 +71,6 @@ EDUCATION_KEYWORDS = {
         "hjúkrun",
         "lyfjafræð",
         "heilsufræð",
-        "heilbrigðis",
-        "lýðheilsu",
         "dýralækn",
     ],
     "háskólamenntun: verkfræði": [
@@ -125,6 +123,8 @@ EDUCATION_KEYWORDS = {
         "sálfræð",
         "þjóðkynnis",
         "heimspeki",
+        "heilbrigðis",
+        "lýðheilsu",
     ],
     "háskólamenntun: landbúnaður": [
         "landbúnaður",
