@@ -132,6 +132,7 @@ CAREER_KEYWORDS = {
         "kennar", "prófessor", "dósent", "lektor", "kennslumadur",
         "lækn", "hjúkrun", "heilsugæzlu",
         "blaðamaður", "ritstjór", "útgáva", "blaðamenn",
+        "lögreglumaður", "yfirlögregluþjónn", "lögreglustjór", "ríkislögreglustjóra",
     ],
     "tæknar og sérmenntað starfsfólk": [
         "sjómaður", "fiskimaður", "fiskveiðu",
