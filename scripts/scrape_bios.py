@@ -106,6 +106,7 @@ EDUCATION_KEYWORDS = {
         "líffræð",
         "jarðfræð",
         "tölvunarfræðingur",
+        "íþróttafræ",
     ],
     "háskólamenntun: listir": [
         "listir",
