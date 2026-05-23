@@ -80,7 +80,6 @@ EDUCATION_KEYWORDS = {
     ],
     "háskólamenntun: hagfræði": [
         "hagfræð",
-        "viðskipt",
         "fjármál",
         "bókhald",
         "þjóðhagfræð",
