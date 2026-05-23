@@ -66,4 +66,5 @@ web:
 	FLASK_APP=$(FLASK_APP) FLASK_ENV=$(FLASK_ENV) APP_URL_PREFIX="$(APP_URL_PREFIX)" THINGID_PREFIX="$(THINGID_PREFIX)" $(PYTHON) -m flask run
 
 scrape_bios:
-	$(PYTHON) scripts/scrape_bios.py --db $(DB)
+	@mkdir -p $(dir $(DB))
+	$(PYTHON) scripts/scrape_bios.py --db sqlite:///$(DB)
