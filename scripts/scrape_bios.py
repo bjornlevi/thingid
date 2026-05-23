@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 EDUCATION_KEYWORDS = {
     # STARFS- OG FRAMHALDSMENNTUN (Vocational and Secondary Education)
-    "framhaldsmenntun": [
+    "menntaskólanám": [
         "stúdentspróf",
         "framhaldsskóla",
         "menntaskóla",
