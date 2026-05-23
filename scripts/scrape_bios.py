@@ -37,6 +37,7 @@ EDUCATION_KEYWORDS = {
         "framhaldsskóla",
         "menntaskóla",
         "fjölbraut",
+        "gagnfræðapróf",
     ],
     "starfsmenntun": [
         "iðnnám",
@@ -48,6 +49,7 @@ EDUCATION_KEYWORDS = {
         "steinnám",
         "múrara",
         "prófskírteini",
+        "samvinnuskólapróf",
     ],
 
     # HÁSKÓLAMENNTUN (Higher/University Education) - by field of study
@@ -121,6 +123,7 @@ EDUCATION_KEYWORDS = {
         "búvísind",
         "bújarðarfræð",
         "búfræðing",
+        "búfræðipróf",
     ],
 }
 
@@ -131,11 +134,12 @@ CAREER_KEYWORDS = {
         "verksmiðju", "skrifstofu", "stofnun", "yfirlögmaður",
     ],
     "sérfræðingar": [
-        "lögmaður", "hæstaréttarlögmaður", "dómari", "saksóknari", "réttarfærandi",
+        "lögmaður", "hæstaréttarlögmaður", "dómari", "saksóknari", "réttarfærandi", "lögfræðingur",
         "kennar", "prófessor", "dósent", "lektor", "kennslumadur",
         "lækn", "hjúkrun", "heilsugæzlu",
         "blaðamaður", "ritstjór", "útgáva", "blaðamenn",
         "lögreglumaður", "yfirlögregluþjónn", "lögreglustjór", "ríkislögreglustjóra",
+        "prestur", "prófastur",
     ],
     "tæknar og sérmenntað starfsfólk": [
         "sjómaður", "fiskimaður", "fiskveiðu",
