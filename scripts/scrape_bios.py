@@ -62,7 +62,7 @@ EDUCATION_KEYWORDS = {
     # HÁSKÓLAMENNTUN (Higher/University Education) - by field of study
     "háskólamenntun: lögfræði": [
         "lögfræð",
-        "cand.jur",
+        "cand",
         "júrís",
         "réttarfræð",
     ],
