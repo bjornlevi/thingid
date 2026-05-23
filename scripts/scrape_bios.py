@@ -50,6 +50,8 @@ EDUCATION_KEYWORDS = {
         "múrara",
         "prófskírteini",
         "samvinnuskólapróf",
+        "fiskimannapróf",
+        "stýrimannapróf",
     ],
 
     # HÁSKÓLAMENNTUN (Higher/University Education) - by field of study
