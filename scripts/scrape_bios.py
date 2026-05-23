@@ -66,6 +66,7 @@ EDUCATION_KEYWORDS = {
         "verkfræð",
         "tækni",
         "iðnfræð",
+        "verkfræðingur",
     ],
     "háskólamenntun: hagfræði": [
         "hagfræð",
@@ -95,6 +96,7 @@ EDUCATION_KEYWORDS = {
         "eðli",
         "líffræð",
         "jarðfræð",
+        "tölvunarfræðingur",
     ],
     "háskólamenntun: listir": [
         "listir",
@@ -115,6 +117,7 @@ EDUCATION_KEYWORDS = {
         "landbúnaður",
         "búvísind",
         "bújarðarfræð",
+        "búfræðing",
     ],
 }
 
