@@ -36,6 +36,7 @@ EDUCATION_KEYWORDS = {
         "stúdentspróf",
         "framhaldsskóla",
         "menntaskóla",
+        "fjölbraut",
     ],
     "starfsmenntun": [
         "iðnnám",
@@ -61,6 +62,8 @@ EDUCATION_KEYWORDS = {
         "hjúkrun",
         "lyfjafræð",
         "heilsufræð",
+        "heilbrigðis",
+        "lýðheilsu",
     ],
     "háskólamenntun: verkfræði": [
         "verkfræð",
