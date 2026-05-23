@@ -117,6 +117,7 @@ EDUCATION_KEYWORDS = {
         "tónlist",
         "leiklist",
         "hönnun",
+        "íslens",
     ],
     "háskólamenntun: félagsvísindi": [
         "stjórnmálafræð",
