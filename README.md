@@ -70,6 +70,16 @@ Update the database periodically (example helper):
 scripts/cron_get_data.sh
 ```
 
+Rebuild a specific þing from cached data, skipping speech downloads:
+
+```bash
+.venv/bin/python scripts/get_data.py --db data/althingi.db --lthing 146 --skip-speeches --sleep 2
+```
+
+Batch duplicate detection uses unique constraints from both the generated models
+and the existing database, so constraints retained by older databases are respected.
+Duplicates are included in the importer’s `skipped as duplicates` count.
+
 ## Production
 
 Use `wsgi.py` with a WSGI server (gunicorn is included in requirements):

@@ -42,7 +42,8 @@ if str(ROOT_DIR) not in sys.path:
 
 import requests
 import xml.etree.ElementTree as ET
-from sqlalchemy import UniqueConstraint, create_engine, text, select, event
+from sqlalchemy import UniqueConstraint, create_engine, text, select, event, inspect
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 
@@ -338,9 +339,9 @@ def list_lthing_sessions(fetcher: Fetcher) -> List[Tuple[int, Dict[str, str]]]:
     return out
 
 
-def unique_constraint_columns(model: Any) -> List[List[str]]:
+def unique_constraint_columns(model: Any, connection: Connection) -> List[List[str]]:
     """
-    Return lists of column names participating in UniqueConstraints on the model.
+    Return unique constraints from both the model and the existing database.
     Used to drop duplicate records within the same ingestion batch before hitting the DB.
     """
     cols: List[List[str]] = []
@@ -350,6 +351,10 @@ def unique_constraint_columns(model: Any) -> List[List[str]]:
     for c in table.constraints:
         if isinstance(c, UniqueConstraint):
             cols.append([col.name for col in c.columns])
+    for constraint in inspect(connection).get_unique_constraints(table.name):
+        names = constraint["column_names"]
+        if names and not any(set(names) == set(existing) for existing in cols):
+            cols.append(names)
     return cols
 
 
@@ -1351,7 +1356,7 @@ def main() -> int:
     
                 child_by_path: Dict[str, str] = {ct["path"]: ct["table"] for ct in r.get("child_tables", [])}
                 child_models: Dict[str, Any] = {ct["table"]: model_by_table[ct["table"]] for ct in r.get("child_tables", [])}
-                unique_constraints = unique_constraint_columns(Model)
+                unique_constraints = unique_constraint_columns(Model, session.connection())
                 seen_unique: List[set] = [set() for _ in unique_constraints]
     
                 parents: List[Any] = []
@@ -1400,6 +1405,7 @@ def main() -> int:
     
                     # Drop duplicates within this batch based on UniqueConstraints (if any)
                     is_duplicate = False
+                    unique_keys = []
                     for idx, cols in enumerate(unique_constraints):
                         key = tuple(row.get(c) for c in cols)
                         if any(v is None for v in key):
@@ -1407,10 +1413,12 @@ def main() -> int:
                         if key in seen_unique[idx]:
                             is_duplicate = True
                             break
-                        seen_unique[idx].add(key)
+                        unique_keys.append((idx, key))
                     if is_duplicate:
                         skipped_dupes += 1
                         continue
+                    for idx, key in unique_keys:
+                        seen_unique[idx].add(key)
     
                     parent = Model(**_filter_model_kwargs(Model, row))
                     parents.append(parent)
