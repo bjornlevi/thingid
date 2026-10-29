@@ -47,6 +47,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 
 from app.constants import WRITTEN_QUESTION_LABEL, ANSWER_STATUS_SVARAD, ANSWER_STATUS_OSVARAD
+from app.utils.abbr import norm_abbr
 from app.utils.dates import parse_date, business_days_between, prefer_athugasemd_date
 
 def _norm_tag(tag: str) -> str:
@@ -457,7 +458,7 @@ def parse_attendance_text(text: str, abbr_to_id: Dict[str, int]) -> Tuple[List[D
             if not abbrs:
                 continue
             for ab in abbrs:
-                abbr = _norm_tag(ab)
+                abbr = norm_abbr(ab)
                 mid = abbr_to_id.get(abbr)
                 if mid and mid not in seen_members:
                     seen_members.add(mid)
@@ -470,10 +471,10 @@ def parse_attendance_text(text: str, abbr_to_id: Dict[str, int]) -> Tuple[List[D
             proxy_mid = None
             if abbrs:
                 if len(abbrs) >= 2:
-                    proxy_mid = abbr_to_id.get(_norm_tag(abbrs[0]))
-                    target_mid = abbr_to_id.get(_norm_tag(abbrs[-1]))
+                    proxy_mid = abbr_to_id.get(norm_abbr(abbrs[0]))
+                    target_mid = abbr_to_id.get(norm_abbr(abbrs[-1]))
                 else:
-                    target_mid = abbr_to_id.get(_norm_tag(abbrs[-1]))
+                    target_mid = abbr_to_id.get(norm_abbr(abbrs[-1]))
             if target_mid:
                 if target_mid not in seen_members:
                     seen_members.add(target_mid)
@@ -482,7 +483,7 @@ def parse_attendance_text(text: str, abbr_to_id: Dict[str, int]) -> Tuple[List[D
         # normal attendance
         m = re.search(r"\(([^\)]+)\)", line)
         if m:
-            abbr = _norm_tag(m.group(1))
+            abbr = norm_abbr(m.group(1))
             mid = abbr_to_id.get(abbr)
             if mid:
                 seen_members.add(mid)
@@ -515,11 +516,12 @@ def parse_arrival_times(text: str, abbr_to_id: Dict[str, int]) -> Dict[int, str]
         if not m_time:
             continue
         time_str = m_time.group(1)
-        abbrs = re.findall(r"\(([^\)]+)\)", lower)
+        # Take abbreviations from the original line; the accent-stripped copy would turn Á into A.
+        abbrs = re.findall(r"\(([^\)]+)\)", line)
         if not abbrs:
             continue
         for ab in abbrs:
-            norm_ab = _norm_tag(ab)
+            norm_ab = norm_abbr(ab)
             mid = abbr_to_id.get(norm_ab)
             if mid:
                 arrivals[mid] = time_str
@@ -536,7 +538,10 @@ def populate_vote_sessions_and_attendance(session: Session, lthing: int, manual_
     VoteSession = manual_models.VoteSession
     execute_with_retry(session, text('DELETE FROM vote_session WHERE lthing=:lt'), {"lt": lthing})
     session.flush()
-    rows = session.execute(text("SELECT attr_atkvaedagreidslunumer, leaf_timi FROM atkvaedagreidslur__atkvaedagreidsla")).fetchall()
+    rows = session.execute(
+        text("SELECT attr_atkvaedagreidslunumer, leaf_timi FROM atkvaedagreidslur__atkvaedagreidsla WHERE ingest_lthing=:lt"),
+        {"lt": lthing},
+    ).fetchall()
     seen_vote_nums = set()
     for vote_num, leaf_timi in rows:
         if vote_num is None or vote_num in seen_vote_nums:
@@ -547,7 +552,8 @@ def populate_vote_sessions_and_attendance(session: Session, lthing: int, manual_
 
     # Build voter attendance counts from vote_details already stored
     rows = session.execute(
-        text("SELECT voter_id, vote FROM vote_details WHERE vote IN ('já','nei','greiðir ekki atkvæði','boðaði fjarvist')")
+        text("SELECT voter_id, vote FROM vote_details WHERE lthing=:lt AND vote IN ('já','nei','greiðir ekki atkvæði','boðaði fjarvist')"),
+        {"lt": lthing},
     ).fetchall()
     for voter_id, vote in rows:
         if voter_id is None:
@@ -1638,7 +1644,7 @@ def main() -> int:
                     ).scalars().all()
                     for p in people:
                         if p.attr_id is not None and p.leaf_skammstofun:
-                            abbr_map[_norm_tag(p.leaf_skammstofun)] = int(p.attr_id)
+                            abbr_map[norm_abbr(p.leaf_skammstofun)] = int(p.attr_id)
                     # derived issue metrics (answer status/latency) for written questions
                     if hasattr(manual_models, "IssueMetrics") and hasattr(manual_models, "IssueDocument"):
                         try:

@@ -27,6 +27,7 @@ from .views_helper import (
     icelandic_sort_key,
     flutningsmenn_primary_id,
 )
+from .utils.abbr import norm_abbr as _norm_abbr
 from .utils.dates import (
     business_days_between,
     parse_date,
@@ -451,13 +452,6 @@ def _cached_speeches(
     return speeches
 
 
-def _norm_abbr(s: str) -> str:
-    s = s or ""
-    s = unicodedata.normalize("NFKD", s)
-    s = "".join(ch for ch in s if ch.isalnum())
-    return s.lower()
-
-
 def _parse_attendance_from_html(html_text: str, abbr_to_member: Dict[str, int]) -> Tuple[set, set]:
     """
     Return (attended_ids, absent_ids) from HTML-ish texti content.
@@ -483,7 +477,7 @@ def _parse_attendance_from_html(html_text: str, abbr_to_member: Dict[str, int]) 
         if idx != -1:
             stop = min(stop, idx)
     section = section[:stop]
-    parts = re.split(r"<br\\s*/?>", section, flags=re.IGNORECASE)
+    parts = re.split(r"<br\s*/?>", section, flags=re.IGNORECASE)
     for raw in parts:
         line = raw.strip()
         if not line:
@@ -1644,7 +1638,7 @@ def member_attendance(member_id: int):
     abbr_map = {_norm_abbr(p.leaf_skammstofun): int(p.attr_id) for p in people if p.attr_id is not None and p.leaf_skammstofun}
 
     def _plain_text_from_fundargerd(texti: str) -> str:
-        txt = re.sub(r"<br\\s*/?>", "\n", texti, flags=re.IGNORECASE)
+        txt = re.sub(r"<br\s*/?>", "\n", texti, flags=re.IGNORECASE)
         txt = re.sub(r"<[^>]+>", "", txt)
         txt = txt.replace("&nbsp;", " ")
         return txt
@@ -1709,7 +1703,6 @@ def member_attendance(member_id: int):
                     texti = candidate
         if not texti:
             return None, None
-        abbr = _norm_abbr(member.leaf_skammstofun) if member and member.leaf_skammstofun else None
         date_part = (_parse_iso(mt.start_time) or parse_date(mt.start_time) or dt.datetime.now()).date()
         arrival_dt = None
         leave_note = None
@@ -1717,9 +1710,11 @@ def member_attendance(member_id: int):
         name_lower = (member.leaf_nafn or "").lower()
         name_norm = unicodedata.normalize("NFKD", name_lower)
         name_norm = "".join(ch for ch in name_norm if not unicodedata.combining(ch))
-        abbr_norm = abbr_ascii = None
-        if member and member.leaf_skammstofun:
-            abbr_ascii = _norm_abbr(member.leaf_skammstofun)
+        member_abbr = _norm_abbr(member.leaf_skammstofun) if member and member.leaf_skammstofun else None
+
+        def _has_member_abbr(s: str) -> bool:
+            return bool(member_abbr) and any(_norm_abbr(a) == member_abbr for a in re.findall(r"\(([^\)]+)\)", s))
+
         for line in lines:
             l = line.lower()
             l_ascii = unicodedata.normalize("NFKD", l)
@@ -1730,10 +1725,7 @@ def member_attendance(member_id: int):
                 first = name_norm.split()[0]
                 if first and first in l_ascii:
                     name_hit = True
-            abbr_hit = False
-            if abbr_ascii:
-                if f"({abbr_ascii})" in l_ascii or abbr_ascii in l_ascii:
-                    abbr_hit = True
+            abbr_hit = _has_member_abbr(line)
             if name_hit or abbr_hit:
                 m = re.search(r"kl\.?\s*(\d{2}:\d{2})", l_ascii, flags=re.IGNORECASE)
                 if not m:
@@ -1751,20 +1743,21 @@ def member_attendance(member_id: int):
                     leave_note = f"Vék af fundi {m2.group(1)}–{m2.group(2)}"
         # Fallback: scan whole text for abbr/name then time
         if not arrival_dt:
+            segments = []
+            if member_abbr:
+                for m_ab in re.finditer(r"\(([^\)]+)\)", texti):
+                    if _norm_abbr(m_ab.group(1)) == member_abbr:
+                        segments.append(texti[m_ab.start(): m_ab.start() + 120].lower())
+                        break
             full_ascii = unicodedata.normalize("NFKD", texti.lower())
             full_ascii = "".join(ch for ch in full_ascii if not unicodedata.combining(ch))
-            targets = []
-            if abbr_ascii:
-                targets.append(abbr_ascii)
             if name_norm:
                 parts = name_norm.split()
                 if parts:
-                    targets.append(parts[0])
-            for tgt in targets:
-                idx = full_ascii.find(tgt)
-                if idx == -1:
-                    continue
-                segment = full_ascii[idx: idx + 120]  # look a bit ahead
+                    idx = full_ascii.find(parts[0])
+                    if idx != -1:
+                        segments.append(full_ascii[idx: idx + 120])  # look a bit ahead
+            for segment in segments:
                 m = re.search(r"kl\.?\s*(\d{2}:\d{2})", segment)
                 if not m:
                     m = re.search(r"(\d{2}:\d{2})", segment)
