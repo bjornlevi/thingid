@@ -420,6 +420,9 @@ def cache_nefndarfundir(fetcher: Fetcher, lthing: int) -> None:
     print(f"[ok] nefndarfundir: cached {fetched} fundargerðir for lthing {lthing}")
 
 
+ATTENDANCE_HEADING_RE = re.compile(r"m\u00e6tt(?:ir|ar)?\s*:", re.IGNORECASE)
+
+
 def parse_attendance_text(text: str, abbr_to_id: Dict[str, int]) -> Tuple[List[Dict[str, Any]], set]:
     """
     Parse attendance from fundargerð HTML-ish text.
@@ -430,11 +433,11 @@ def parse_attendance_text(text: str, abbr_to_id: Dict[str, int]) -> Tuple[List[D
     seen_members: set = set()
     if not text:
         return attendance, seen_members
-    lower = text.lower()
-    start = lower.find("mætt:")
-    if start == -1:
+    # Older þing (e.g. 146) use "Mættir:", newer ones "Mætt:".
+    start_match = ATTENDANCE_HEADING_RE.search(text)
+    if not start_match:
         return attendance, seen_members
-    section = text[start:]
+    section = text[start_match.start():]
     stop_markers = ["<h2", "bókað:", "b\u00f3ka\u00f0:"]
     stop = len(section)
     for m in stop_markers:

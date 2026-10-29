@@ -470,12 +470,11 @@ def _parse_attendance_from_html(html_text: str, abbr_to_member: Dict[str, int]) 
     absent: set = set()
     if not html_text:
         return attended, absent
-    # Extract section after "Mætt:" until next <h2 or end
-    lower = html_text.lower()
-    start = lower.find("mætt:")
-    if start == -1:
+    # Extract section after "Mætt:" (older þing: "Mættir:") until next <h2 or end
+    start_match = re.search(r"m\u00e6tt(?:ir|ar)?\s*:", html_text, flags=re.IGNORECASE)
+    if not start_match:
         return attended, absent
-    section = html_text[start:]
+    section = html_text[start_match.start():]
     # Stop at next heading marker
     stop_markers = ["<h2", "bókað:", "b\u00f3ka\u00f0:"]
     stop = len(section)
