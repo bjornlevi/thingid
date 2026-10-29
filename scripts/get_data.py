@@ -1173,7 +1173,7 @@ def main() -> int:
     ap.add_argument("--cache-dir", default="data/cache", help="Directory for HTTP cache (default: data/cache)")
     ap.add_argument("--force-fetch", action="store_true", help="Ignore cache and re-download all resources")
     ap.add_argument("--speeches-only", action="store_true", help="Only refresh raedur (skip other resources; keeps existing DB)")
-    ap.add_argument("--skip-speeches", action="store_true", help="Skip fetching individual raedur XML documents")
+    ap.add_argument("--skip-speeches", action="store_true", help="Skip the raedulisti list and individual raedur XML documents (keeps existing speech data)")
     ap.add_argument("--lthing", type=int, default=None, help="Fetch a specific löggjafarþing number")
     ap.add_argument("--lthing-range", type=str, default=None, help="Inclusive range start,end (e.g. 122,145)")
     ap.add_argument("--all-lthing", action="store_true", help="Fetch all löggjafarþing sessions (uses existing DB)")
@@ -1199,6 +1199,11 @@ def main() -> int:
         resources = [r for r in resources if r.get("table") == "raedulisti__raeda"]
         if not resources:
             raise RuntimeError("schema_map is missing raedulisti resource required for --speeches-only")
+    if args.skip_speeches:
+        if args.speeches_only:
+            raise SystemExit("--skip-speeches and --speeches-only cannot be used together")
+        # Existing raedulisti rows are kept since the per-resource DELETE only runs for fetched resources.
+        resources = [r for r in resources if r.get("table") != "raedulisti__raeda"]
 
     if args.speeches_only:
         args.reset_db = False
