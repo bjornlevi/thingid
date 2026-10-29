@@ -30,6 +30,7 @@ from html import unescape
 from html.parser import HTMLParser
 from collections import defaultdict
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse, parse_qs
 from pathlib import Path
@@ -88,6 +89,7 @@ class Fetcher:
         self.max_age_hours = max_age_hours
         self.force = force
         self.cache_only_default = False
+        self.max_retry_wait_s = 300.0
         if self.cache_dir:
             os.makedirs(self.cache_dir, exist_ok=True)
 
@@ -111,17 +113,51 @@ class Fetcher:
         for i in range(retries):
             try:
                 r = self.sess.get(url, timeout=self.timeout)
-                r.raise_for_status()
-                time.sleep(self.sleep_s)
-                content = r.content
-                if cache_path:
-                    with open(cache_path, "wb") as f:
-                        f.write(content)
-                return content
-            except Exception as e:
+            except requests.RequestException as e:
                 last = e
-                time.sleep(0.5 * (i + 1))
+                if i + 1 < retries:
+                    time.sleep(0.5 * (i + 1))
+                continue
+            if r.status_code in (429, 503):
+                last = requests.HTTPError(f"{r.status_code} {r.reason} for url: {url}", response=r)
+                if i + 1 < retries:
+                    wait = self._retry_after_seconds(r.headers.get("Retry-After"))
+                    if wait is None:
+                        wait = min(5.0 * (2 ** i), self.max_retry_wait_s)
+                    print(f"[warn] {r.status_code} from {url}; retrying in {wait:.0f}s ({i + 1}/{retries - 1})")
+                    time.sleep(wait)
+                continue
+            try:
+                r.raise_for_status()
+            except requests.HTTPError as e:
+                last = e
+                if i + 1 < retries:
+                    time.sleep(0.5 * (i + 1))
+                continue
+            time.sleep(self.sleep_s)
+            content = r.content
+            if cache_path:
+                with open(cache_path, "wb") as f:
+                    f.write(content)
+            return content
         raise RuntimeError(f"Failed to fetch {url}: {last}") from last
+
+    def _retry_after_seconds(self, value: Optional[str]) -> Optional[float]:
+        """Parse a Retry-After header (delta-seconds or HTTP-date), capped at max_retry_wait_s."""
+        if not value:
+            return None
+        value = value.strip()
+        try:
+            seconds = float(value)
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(value)
+            except (TypeError, ValueError):
+                return None
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            seconds = (when - datetime.now(timezone.utc)).total_seconds()
+        return min(max(seconds, 0.0), self.max_retry_wait_s)
 
 def parse_xml(content: bytes, url: str) -> ET.Element:
     try:
